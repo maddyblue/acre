@@ -1,34 +1,28 @@
 use crate::dial;
-use crate::fsys::Fsys;
+use crate::{fsys::Fsys, Result};
 use nine::p2000::OpenMode;
 use std::io::{BufRead, BufReader};
 
-fn mount() -> Result<Fsys, String> {
+fn mount() -> Result<Fsys> {
 	dial::mount_service("acme")
 }
 
-pub fn windows() -> Result<Vec<WinInfo>, String> {
+pub fn windows() -> Result<Vec<WinInfo>> {
 	let mut fsys = mount()?;
 	let index = fsys.open("index", OpenMode::READ)?;
 	let r = BufReader::new(index);
 	let mut ws = Vec::new();
 	for line in r.lines() {
-		let line = match line {
-			Ok(v) => v,
-			Err(e) => return Err(e.to_string()),
-		};
-		let sp: Vec<&str> = line.split_whitespace().collect();
-		if sp.len() < 6 {
-			continue;
+		if let Ok(line) = line {
+			let sp: Vec<&str> = line.split_whitespace().collect();
+			if sp.len() < 6 {
+				continue;
+			}
+			ws.push(WinInfo {
+				id: sp[0].parse()?,
+				name: sp[5].to_string(),
+			});
 		}
-		let id: usize = match sp[0].parse() {
-			Ok(v) => v,
-			Err(e) => return Err(e.to_string()),
-		};
-		ws.push(WinInfo {
-			id,
-			name: sp[5].to_string(),
-		});
 	}
 	Ok(ws)
 }

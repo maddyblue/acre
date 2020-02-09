@@ -2,7 +2,7 @@ extern crate regex;
 
 use crate::{
 	conn::{Conn, RcConn},
-	fid, fsys,
+	fid, fsys, Result,
 };
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -11,27 +11,20 @@ use std::env;
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 
-pub fn dial(network: &str, addr: &str) -> Result<RcConn, String> {
-	match network {
-		"unix" => match UnixStream::connect(addr) {
-			Ok(stream) => {
-				let conn = Conn::new(stream)?;
-				Ok(RcConn {
-					rc: Rc::new(RefCell::new(conn)),
-				})
-			}
-			Err(e) => Err(e.to_string()),
-		},
-		_ => Err(format!("unknown network: {}", network)),
-	}
+pub fn dial(addr: &str) -> Result<RcConn> {
+	let stream = UnixStream::connect(addr)?;
+	let conn = Conn::new(stream)?;
+	Ok(RcConn {
+		rc: Rc::new(RefCell::new(conn)),
+	})
 }
 
-pub fn dial_service(service: &str) -> Result<RcConn, String> {
+pub fn dial_service(service: &str) -> Result<RcConn> {
 	let ns = namespace();
-	dial("unix", (ns + "/" + service).as_str())
+	dial((ns + "/" + service).as_str())
 }
 
-pub fn mount_service(service: &str) -> Result<fsys::Fsys, String> {
+pub fn mount_service(service: &str) -> Result<fsys::Fsys> {
 	let mut conn = dial_service(service)?;
 	let fsys = conn.attach(fid::get_user(), "".to_string())?;
 	Ok(fsys)

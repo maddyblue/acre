@@ -1,7 +1,7 @@
 extern crate byteorder;
 extern crate nine;
 
-use crate::{fid, fsys};
+use crate::{err_str, fid, fsys, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use nine::{de::*, p2000::*, ser::*};
 use std::cell::RefCell;
@@ -22,7 +22,7 @@ where
 }
 
 impl<Stream: Write + Read> Conn<Stream> {
-	pub fn new(stream: Stream) -> Result<Self, String> {
+	pub fn new(stream: Stream) -> Result<Self> {
 		let mut c = Conn {
 			stream,
 			msg_buf: Vec::new(),
@@ -37,11 +37,11 @@ impl<Stream: Write + Read> Conn<Stream> {
 		};
 		let rx = c.rpc::<Tversion, Rversion>(&tx)?;
 		if rx.msize > c.msize {
-			return Err(format!("invalid msize {}", rx.msize));
+			return Err(err_str(format!("invalid msize {}", rx.msize)));
 		}
 		c.msize = rx.msize;
 		if rx.version != "9P2000" {
-			return Err(format!("invalid version {}", rx.version));
+			return Err(err_str(format!("invalid version {}", rx.version)));
 		}
 
 		Ok(c)
@@ -54,17 +54,12 @@ impl<Stream: Write + Read> Conn<Stream> {
 	>(
 		&mut self,
 		s: &S,
-	) -> Result<D, String> {
-		if let Err(e) = self.send_msg(s) {
-			return Err(e.to_string());
-		}
-		match self.read_msg::<D>() {
-			Ok(d) => Ok(d),
-			Err(e) => Err(e.to_string()),
-		}
+	) -> Result<D> {
+		self.send_msg(s)?;
+		self.read_msg::<D>()
 	}
 
-	fn send_msg<T: Serialize + MessageTypeId + Debug>(&mut self, t: &T) -> Result<(), SerError> {
+	fn send_msg<T: Serialize + MessageTypeId + Debug>(&mut self, t: &T) -> Result<()> {
 		self.msg_buf.truncate(0);
 		let amt = into_vec(&t, &mut self.msg_buf)?;
 
@@ -74,7 +69,7 @@ impl<Stream: Write + Read> Conn<Stream> {
 		Ok(self.stream.write_all(&self.msg_buf[0..amt as usize])?)
 	}
 
-	fn read_msg<'de, T: Deserialize<'de> + MessageTypeId + Debug>(&mut self) -> Result<T, String> {
+	fn read_msg<'de, T: Deserialize<'de> + MessageTypeId + Debug>(&mut self) -> Result<T> {
 		let _size: u32 = self.read_a()?;
 		let mtype: u8 = self.read_a()?;
 		let want = <T as MessageTypeId>::MSG_TYPE_ID;
@@ -83,15 +78,18 @@ impl<Stream: Write + Read> Conn<Stream> {
 		}
 		if mtype == 107 {
 			let rerror: Rerror = self.read_a()?;
-			return Err(rerror.ename.to_string());
+			return Err(err_str(rerror.ename.to_string()));
 		}
-		Err(format!("unknown type: {}, expected: {}", mtype, want))
+		Err(err_str(format!(
+			"unknown type: {}, expected: {}",
+			mtype, want
+		)))
 	}
 
-	fn read_a<'de, T: Deserialize<'de> + Debug>(&mut self) -> Result<T, String> {
+	fn read_a<'de, T: Deserialize<'de> + Debug>(&mut self) -> Result<T> {
 		match from_reader(&mut self.stream) {
 			Ok(t) => Ok(t),
-			Err(e) => Err(e.to_string()),
+			Err(e) => Err(err_str(e.to_string())),
 		}
 	}
 
@@ -108,7 +106,7 @@ pub struct RcConn {
 pub type RefConn = Rc<RefCell<Conn<UnixStream>>>;
 
 impl RcConn {
-	pub fn attach(&mut self, user: String, aname: String) -> Result<fsys::Fsys, String> {
+	pub fn attach(&mut self, user: String, aname: String) -> Result<fsys::Fsys> {
 		let mut c = self.rc.borrow_mut();
 		let newfid = c.newfid();
 		let attach = Tattach {
@@ -130,7 +128,7 @@ impl RcConn {
 const NOFID: u32 = !0;
 
 impl<Stream: Write + Read> Conn<Stream> {
-	pub fn walk(&mut self, fid: u32, newfid: u32, wname: Vec<String>) -> Result<Vec<Qid>, String> {
+	pub fn walk(&mut self, fid: u32, newfid: u32, wname: Vec<String>) -> Result<Vec<Qid>> {
 		let walk = Twalk {
 			tag: 0,
 			fid,
@@ -140,12 +138,12 @@ impl<Stream: Write + Read> Conn<Stream> {
 		let rwalk = self.rpc::<Twalk, Rwalk>(&walk)?;
 		Ok(rwalk.wqid)
 	}
-	pub fn open(&mut self, fid: u32, mode: OpenMode) -> Result<(), String> {
+	pub fn open(&mut self, fid: u32, mode: OpenMode) -> Result<()> {
 		let open = Topen { tag: 0, fid, mode };
 		self.rpc::<Topen, Ropen>(&open)?;
 		Ok(())
 	}
-	pub fn read(&mut self, fid: u32, offset: u64, count: u32) -> Result<Vec<u8>, String> {
+	pub fn read(&mut self, fid: u32, offset: u64, count: u32) -> Result<Vec<u8>> {
 		let read = Tread {
 			tag: 0,
 			fid,
@@ -155,7 +153,7 @@ impl<Stream: Write + Read> Conn<Stream> {
 		let rread = self.rpc::<Tread, Rread>(&read)?;
 		return Ok(rread.data);
 	}
-	pub fn clunk(&mut self, fid: u32) -> Result<(), String> {
+	pub fn clunk(&mut self, fid: u32) -> Result<()> {
 		let clunk = Tclunk { tag: 0, fid };
 		self.rpc::<Tclunk, Rclunk>(&clunk)?;
 		Ok(())

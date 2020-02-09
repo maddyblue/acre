@@ -1,6 +1,6 @@
 extern crate nine;
 
-use crate::conn::RefConn;
+use crate::{conn::RefConn, Result};
 use nine::p2000::{OpenMode, Qid};
 use std::cmp;
 use std::env;
@@ -30,7 +30,7 @@ impl Fid {
 			offset: 0,
 		}
 	}
-	pub fn walk(&mut self, name: &str) -> Result<Fid, String> {
+	pub fn walk(&mut self, name: &str) -> Result<Fid> {
 		let mut c = self.c.borrow_mut();
 		let wfid = c.newfid();
 		let mut fid = self.fid;
@@ -62,7 +62,7 @@ impl Fid {
 		Ok(Fid::new(Rc::clone(&self.c), wfid, qid))
 	}
 
-	pub fn open(&mut self, mode: OpenMode) -> Result<(), String> {
+	pub fn open(&mut self, mode: OpenMode) -> Result<()> {
 		let mut c = self.c.borrow_mut();
 		c.open(self.fid, mode)?;
 		self.mode = mode;
@@ -79,7 +79,7 @@ impl io::Read for Fid {
 		let n: u32 = cmp::min(buf.len() as u32, msize);
 		let data = match c.read(self.fid, self.offset, n) {
 			Ok(r) => r,
-			Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
+			Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))),
 		};
 		for (i, x) in data.iter().enumerate() {
 			buf[i] = *x
