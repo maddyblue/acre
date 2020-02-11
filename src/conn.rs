@@ -151,25 +151,21 @@ impl<Stream: Write + Read> Conn<Stream> {
 			count,
 		};
 		let rread = self.rpc::<Tread, Rread>(&read)?;
-		return Ok(rread.data);
+		Ok(rread.data)
+	}
+	pub fn write(&mut self, fid: u32, offset: u64, data: Vec<u8>) -> Result<u32> {
+		let write = Twrite {
+			tag: 0,
+			fid,
+			offset,
+			data,
+		};
+		let rwrite = self.rpc::<Twrite, Rwrite>(&write)?;
+		Ok(rwrite.count)
 	}
 	pub fn clunk(&mut self, fid: u32) -> Result<()> {
 		let clunk = Tclunk { tag: 0, fid };
 		self.rpc::<Tclunk, Rclunk>(&clunk)?;
 		Ok(())
 	}
-	/*
-	fn write(&mut self, fid: u32, offset: u64, data: Vec<u8>) -> u32 {
-		let twrite = Twrite {
-			tag: 0,
-			fid,
-			offset,
-			data,
-		};
-		self.send_msg(&twrite).unwrap();
-		let rwrite: Rwrite = self.read_msg().unwrap();
-
-		rwrite.count
-	}
-	*/
 }

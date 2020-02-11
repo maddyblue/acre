@@ -89,6 +89,30 @@ impl io::Read for Fid {
 	}
 }
 
+impl io::Write for Fid {
+	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+		let mut c = self.c.borrow_mut();
+		let msize = (c.msize - IOHDRSZ) as usize;
+		let mut tot: usize = 0;
+		let n = buf.len();
+		let mut first = true;
+		while tot < n || first {
+			let want: usize = cmp::min(n - tot, msize);
+			let got = match c.write(self.fid, self.offset, buf[tot..tot + want].to_vec()) {
+				Ok(r) => r as usize,
+				Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))),
+			};
+			tot += got;
+			self.offset += got as u64;
+			first = false;
+		}
+		Ok(tot)
+	}
+	fn flush(&mut self) -> io::Result<()> {
+		Ok(())
+	}
+}
+
 impl Drop for Fid {
 	fn drop(&mut self) {
 		let mut c = self.c.borrow_mut();
