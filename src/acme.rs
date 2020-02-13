@@ -74,6 +74,7 @@ pub struct Win {
 	id: usize,
 	ctl: Fid,
 	body: Fid,
+	ebuf: BufReader<Fid>,
 }
 
 impl Win {
@@ -92,9 +93,14 @@ impl Win {
 	}
 	// open connects to the existing window with the given id.
 	pub fn open(fsys: &mut Fsys, id: usize, ctl: Fid) -> Result<Win> {
-		let addr = format!("{}/body", id);
-		let body = fsys.open(addr.as_str(), OpenMode::RDWR)?;
-		Ok(Win { id, ctl, body })
+		let body = fsys.open(format!("{}/body", id).as_str(), OpenMode::RDWR)?;
+		let event = fsys.open(format!("{}/event", id).as_str(), OpenMode::RDWR)?;
+		Ok(Win {
+			id,
+			ctl,
+			body,
+			ebuf: BufReader::new(event),
+		})
 	}
 
 	pub fn id(&self) -> usize {
@@ -122,6 +128,111 @@ impl Win {
 		let cmd = if sure { "delete" } else { "del" };
 		self.ctl(cmd.to_string())
 	}
+	pub fn read_event(&mut self) -> Result<Event> {
+		let mut e = self.get_event()?;
+
+		// expansion
+		if e.flag & 2 != 0 {
+			let mut e2 = self.get_event()?;
+			if e.q0 == e.q1 {
+				e2.orig_q0 = e.q0;
+				e2.orig_q1 = e.q1;
+				e2.flag = e.flag;
+				e = e2;
+			}
+		}
+
+		// chorded argument
+		if e.flag & 8 != 0 {
+			let e3 = self.get_event()?;
+			let e4 = self.get_event()?;
+			e.arg = e3.text;
+			e.loc = e4.text;
+		}
+
+		Ok(e)
+	}
+	fn get_event(&mut self) -> Result<Event> {
+		let mut line = String::new();
+		self.ebuf.read_line(&mut line)?;
+		let mut ch = line.chars();
+		let mut next = || -> Result<char> {
+			match ch.next() {
+				Some(c) => Ok(c),
+				None => Err(err_str(format!("expected another character"))),
+			}
+		};
+
+		let c1 = next()?;
+		let c2 = next()?;
+		let q0 = get_en(&mut ch)?;
+		let q1 = get_en(&mut ch)?;
+		let flag = get_en(&mut ch)?;
+		let nr = get_en(&mut ch)?;
+		if nr > EVENT_SIZE {
+			return Err(err_str(format!("event size too long")));
+		}
+		let mut text = ch.collect::<String>();
+		if text.pop().unwrap_or(' ') != '\n' {
+			return Err(err_str(format!("phase error")));
+		}
+		if text.len() != nr as usize {
+			return Err(err_str(format!("incorrect event string length")));
+		}
+
+		Ok(Event {
+			c1,
+			c2,
+			q0,
+			q1,
+			flag,
+			nr,
+			text,
+			orig_q0: q0,
+			orig_q1: q1,
+			arg: "".to_string(),
+			loc: "".to_string(),
+		})
+	}
+	/*
+	pub fn write_event(&mut self, ev: Event) -> Result<()> {
+		let s = format!("{}{}{} {} \n", ev.c1, ev.c2, ev.q0, ev.q1);
+		self.write("event", s)
+	}
+	*/
+}
+
+const EVENT_SIZE: u32 = 256;
+
+fn get_en(ch: &mut std::str::Chars) -> Result<u32> {
+	let mut c: char;
+	let mut n: u32 = 0;
+	loop {
+		c = ch.next().unwrap();
+		if c < '0' || c > '9' {
+			break;
+		}
+		n = n * 10 + c.to_digit(10).unwrap();
+	}
+	if c != ' ' {
+		return Err(err_str(format!("event number syntax")));
+	}
+	Ok(n)
+}
+
+#[derive(Debug)]
+pub struct Event {
+	c1: char,
+	c2: char,
+	q0: u32,
+	q1: u32,
+	orig_q0: u32,
+	orig_q1: u32,
+	flag: u32,
+	nr: u32,
+	text: String,
+	arg: String,
+	loc: String,
 }
 
 #[cfg(test)]
@@ -147,6 +258,8 @@ mod tests {
 		let mut w = Win::new().unwrap();
 		w.name("testing").unwrap();
 		w.write("body", "blah hello".to_string()).unwrap();
+		let ev = w.read_event().unwrap();
+		println!("ev: {:?}", ev);
 		w.del(true).unwrap();
 	}
 }
