@@ -74,7 +74,13 @@ pub struct Win {
 	id: usize,
 	ctl: Fid,
 	body: Fid,
-	ebuf: BufReader<Fid>,
+	event: Fid,
+}
+
+pub enum File {
+	Ctl,
+	Body,
+	Event,
 }
 
 impl Win {
@@ -99,27 +105,27 @@ impl Win {
 			id,
 			ctl,
 			body,
-			ebuf: BufReader::new(event),
+			event,
 		})
 	}
 
 	pub fn id(&self) -> usize {
 		self.id
 	}
-	pub fn write(&mut self, name: &str, data: String) -> Result<()> {
-		let f = self.fid(name)?;
+	pub fn write(&mut self, file: File, data: String) -> Result<()> {
+		let f = self.fid(file);
 		f.write(data.as_bytes())?;
 		Ok(())
 	}
-	fn fid(&mut self, name: &str) -> Result<&mut Fid> {
-		match name {
-			"ctl" => Ok(&mut self.ctl),
-			"body" => Ok(&mut self.body),
-			_ => Err(err_str(format!("unknown acme file: {}", name))),
+	fn fid(&mut self, file: File) -> &mut Fid {
+		match file {
+			File::Ctl => &mut self.ctl,
+			File::Body => &mut self.body,
+			File::Event => &mut self.event,
 		}
 	}
 	pub fn ctl(&mut self, data: String) -> Result<()> {
-		self.write("ctl", format!("{}\n", data))
+		self.write(File::Ctl, format!("{}\n", data))
 	}
 	pub fn name(&mut self, name: &str) -> Result<()> {
 		self.ctl(format!("name {}", name))
@@ -152,32 +158,46 @@ impl Win {
 
 		Ok(e)
 	}
-	fn get_event(&mut self) -> Result<Event> {
-		let mut line = String::new();
-		self.ebuf.read_line(&mut line)?;
-		let mut ch = line.chars();
-		let mut next = || -> Result<char> {
-			match ch.next() {
-				Some(c) => Ok(c),
-				None => Err(err_str(format!("expected another character"))),
+	fn get_ch(&mut self) -> Result<char> {
+		let mut buf = [0; 1];
+		let sz = self.event.read(&mut buf)?;
+		if sz == 0 {
+			return Err(err_str(format!("expected another character")));
+		}
+		Ok(buf[0] as char)
+	}
+	fn get_en(&mut self) -> Result<u32> {
+		let mut c: char;
+		let mut n: u32 = 0;
+		loop {
+			c = self.get_ch()?;
+			if c < '0' || c > '9' {
+				break;
 			}
-		};
-
-		let c1 = next()?;
-		let c2 = next()?;
-		let q0 = get_en(&mut ch)?;
-		let q1 = get_en(&mut ch)?;
-		let flag = get_en(&mut ch)?;
-		let nr = get_en(&mut ch)?;
+			n = n * 10 + c.to_digit(10).unwrap();
+		}
+		if c != ' ' {
+			return Err(err_str(format!("event number syntax")));
+		}
+		Ok(n)
+	}
+	fn get_event(&mut self) -> Result<Event> {
+		let c1 = self.get_ch()?;
+		let c2 = self.get_ch()?;
+		let q0 = self.get_en()?;
+		let q1 = self.get_en()?;
+		let flag = self.get_en()?;
+		let nr = self.get_en()? as usize;
 		if nr > EVENT_SIZE {
 			return Err(err_str(format!("event size too long")));
 		}
-		let mut text = ch.collect::<String>();
-		if text.pop().unwrap_or(' ') != '\n' {
-			return Err(err_str(format!("phase error")));
+		let mut text = vec![];
+		while text.len() < nr {
+			text.push(self.get_ch()?);
 		}
-		if text.len() != nr as usize {
-			return Err(err_str(format!("incorrect event string length")));
+		let text: String = text.into_iter().collect();
+		if self.get_ch()? != '\n' {
+			return Err(err_str(format!("phase error")));
 		}
 
 		Ok(Event {
@@ -186,7 +206,7 @@ impl Win {
 			q0,
 			q1,
 			flag,
-			nr,
+			nr: nr as u32,
 			text,
 			orig_q0: q0,
 			orig_q1: q1,
@@ -194,31 +214,13 @@ impl Win {
 			loc: "".to_string(),
 		})
 	}
-	/*
 	pub fn write_event(&mut self, ev: Event) -> Result<()> {
 		let s = format!("{}{}{} {} \n", ev.c1, ev.c2, ev.q0, ev.q1);
-		self.write("event", s)
+		self.write(File::Event, s)
 	}
-	*/
 }
 
-const EVENT_SIZE: u32 = 256;
-
-fn get_en(ch: &mut std::str::Chars) -> Result<u32> {
-	let mut c: char;
-	let mut n: u32 = 0;
-	loop {
-		c = ch.next().unwrap();
-		if c < '0' || c > '9' {
-			break;
-		}
-		n = n * 10 + c.to_digit(10).unwrap();
-	}
-	if c != ' ' {
-		return Err(err_str(format!("event number syntax")));
-	}
-	Ok(n)
-}
+const EVENT_SIZE: usize = 256;
 
 #[derive(Debug)]
 pub struct Event {
@@ -233,6 +235,22 @@ pub struct Event {
 	text: String,
 	arg: String,
 	loc: String,
+}
+
+impl Event {
+	pub fn load_text(&mut self) {
+		if self.text.len() == 0 && self.q0 < self.q1 {
+			/*
+			w.Addr("#%d,#%d", e.Q0, e.Q1)
+			data, err := w.ReadAll("xdata")
+			if err != nil {
+				w.Err(err.Error())
+			}
+			e.Text = data
+			*/
+			panic!("unimplemented");
+		}
+	}
 }
 
 #[cfg(test)]
@@ -254,12 +272,32 @@ mod tests {
 	}
 
 	#[test]
+	#[ignore]
 	fn new() {
 		let mut w = Win::new().unwrap();
 		w.name("testing").unwrap();
-		w.write("body", "blah hello".to_string()).unwrap();
-		let ev = w.read_event().unwrap();
-		println!("ev: {:?}", ev);
+		w.write(File::Body, "blah hello done hello".to_string())
+			.unwrap();
+		loop {
+			let mut ev = w.read_event().unwrap();
+			println!("ev: {:?}", ev);
+			match ev.c2 {
+				'x' | 'X' => {
+					let text = ev.text.trim();
+					if text == "done" {
+						break;
+					}
+					println!("cmd text: {}", ev.text);
+					w.write_event(ev).unwrap();
+				}
+				'l' | 'L' => {
+					ev.load_text();
+					println!("look: {}", ev.text);
+					w.write_event(ev).unwrap();
+				}
+				_ => {}
+			}
+		}
 		w.del(true).unwrap();
 	}
 }
