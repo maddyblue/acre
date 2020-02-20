@@ -7,7 +7,7 @@ pub mod fsys;
 use std::error::Error;
 use std::fmt;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Sync + Send>>;
 
 pub fn err_str(error: String) -> Box<ErrorStr> {
 	Box::new(ErrorStr { error })

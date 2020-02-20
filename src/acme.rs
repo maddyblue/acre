@@ -9,8 +9,8 @@ fn mount() -> Result<Fsys> {
 
 #[derive(Debug)]
 pub struct WinInfo {
-	id: usize,
-	name: String,
+	pub id: usize,
+	pub name: String,
 }
 
 impl WinInfo {
@@ -42,9 +42,9 @@ pub struct LogReader {
 
 #[derive(Debug)]
 pub struct LogEvent {
-	id: usize,
-	op: String,
-	name: String,
+	pub id: usize,
+	pub op: String,
+	pub name: String,
 }
 
 impl LogReader {
@@ -74,66 +74,22 @@ pub struct Win {
 	id: usize,
 	ctl: Fid,
 	body: Fid,
-	event: Fid,
+	addr: Fid,
+	data: Fid,
 }
 
 pub enum File {
 	Ctl,
 	Body,
-	Event,
+	Addr,
+	Data,
 }
 
-impl Win {
-	pub fn new() -> Result<Win> {
-		let mut fsys = mount()?;
-		let mut fid = fsys.open("new/ctl", OpenMode::RDWR)?;
-		let mut buf = [0; 100];
-		let sz = fid.read(&mut buf)?;
-		let data = String::from_utf8(buf[0..sz].to_vec())?;
-		let sp: Vec<&str> = data.split_whitespace().collect();
-		if sp.len() == 0 {
-			return Err(err_str("short read from acme/new/ctl".to_string()));
-		}
-		let id = sp[0].parse()?;
-		Win::open(&mut fsys, id, fid)
-	}
-	// open connects to the existing window with the given id.
-	pub fn open(fsys: &mut Fsys, id: usize, ctl: Fid) -> Result<Win> {
-		let body = fsys.open(format!("{}/body", id).as_str(), OpenMode::RDWR)?;
-		let event = fsys.open(format!("{}/event", id).as_str(), OpenMode::RDWR)?;
-		Ok(Win {
-			id,
-			ctl,
-			body,
-			event,
-		})
-	}
+pub struct WinEvents {
+	event: Fid,
+}
 
-	pub fn id(&self) -> usize {
-		self.id
-	}
-	pub fn write(&mut self, file: File, data: String) -> Result<()> {
-		let f = self.fid(file);
-		f.write(data.as_bytes())?;
-		Ok(())
-	}
-	fn fid(&mut self, file: File) -> &mut Fid {
-		match file {
-			File::Ctl => &mut self.ctl,
-			File::Body => &mut self.body,
-			File::Event => &mut self.event,
-		}
-	}
-	pub fn ctl(&mut self, data: String) -> Result<()> {
-		self.write(File::Ctl, format!("{}\n", data))
-	}
-	pub fn name(&mut self, name: &str) -> Result<()> {
-		self.ctl(format!("name {}", name))
-	}
-	pub fn del(&mut self, sure: bool) -> Result<()> {
-		let cmd = if sure { "delete" } else { "del" };
-		self.ctl(cmd.to_string())
-	}
+impl WinEvents {
 	pub fn read_event(&mut self) -> Result<Event> {
 		let mut e = self.get_event()?;
 
@@ -216,7 +172,79 @@ impl Win {
 	}
 	pub fn write_event(&mut self, ev: Event) -> Result<()> {
 		let s = format!("{}{}{} {} \n", ev.c1, ev.c2, ev.q0, ev.q1);
-		self.write(File::Event, s)
+		self.event.write(s.as_bytes())?;
+		Ok(())
+	}
+}
+
+impl Win {
+	pub fn new() -> Result<(Win, WinEvents)> {
+		let mut fsys = mount()?;
+		let mut fid = fsys.open("new/ctl", OpenMode::RDWR)?;
+		let mut buf = [0; 100];
+		let sz = fid.read(&mut buf)?;
+		let data = String::from_utf8(buf[0..sz].to_vec())?;
+		let sp: Vec<&str> = data.split_whitespace().collect();
+		if sp.len() == 0 {
+			return Err(err_str("short read from acme/new/ctl".to_string()));
+		}
+		let id = sp[0].parse()?;
+		Win::open(&mut fsys, id, fid)
+	}
+	// open connects to the existing window with the given id.
+	pub fn open(fsys: &mut Fsys, id: usize, ctl: Fid) -> Result<(Win, WinEvents)> {
+		let body = fsys.open(format!("{}/body", id).as_str(), OpenMode::RDWR)?;
+		let addr = fsys.open(format!("{}/addr", id).as_str(), OpenMode::RDWR)?;
+		let event = fsys.open(format!("{}/event", id).as_str(), OpenMode::RDWR)?;
+		let data = fsys.open(format!("{}/data", id).as_str(), OpenMode::RDWR)?;
+		Ok((
+			Win {
+				id,
+				ctl,
+				body,
+				addr,
+				data,
+			},
+			WinEvents { event },
+		))
+	}
+
+	pub fn id(&self) -> usize {
+		self.id
+	}
+	pub fn write(&mut self, file: File, data: String) -> Result<()> {
+		let f = self.fid(file);
+		f.write(data.as_bytes())?;
+		Ok(())
+	}
+	fn fid(&mut self, file: File) -> &mut Fid {
+		match file {
+			File::Ctl => &mut self.ctl,
+			File::Body => &mut self.body,
+			File::Addr => &mut self.addr,
+			File::Data => &mut self.data,
+		}
+	}
+	pub fn ctl(&mut self, data: String) -> Result<()> {
+		self.write(File::Ctl, format!("{}\n", data))
+	}
+	pub fn addr(&mut self, data: String) -> Result<()> {
+		self.write(File::Addr, format!("{}\n", data))
+	}
+	pub fn clear(&mut self) -> Result<()> {
+		println!("set addr");
+		self.write(File::Addr, format!(","))?;
+		println!("clear data");
+		self.write(File::Data, format!(""))?;
+		println!("done");
+		Ok(())
+	}
+	pub fn name(&mut self, name: &str) -> Result<()> {
+		self.ctl(format!("name {}", name))
+	}
+	pub fn del(&mut self, sure: bool) -> Result<()> {
+		let cmd = if sure { "delete" } else { "del" };
+		self.ctl(cmd.to_string())
 	}
 }
 
@@ -224,17 +252,17 @@ const EVENT_SIZE: usize = 256;
 
 #[derive(Debug)]
 pub struct Event {
-	c1: char,
-	c2: char,
-	q0: u32,
-	q1: u32,
-	orig_q0: u32,
-	orig_q1: u32,
-	flag: u32,
-	nr: u32,
-	text: String,
-	arg: String,
-	loc: String,
+	pub c1: char,
+	pub c2: char,
+	pub q0: u32,
+	pub q1: u32,
+	pub orig_q0: u32,
+	pub orig_q1: u32,
+	pub flag: u32,
+	pub nr: u32,
+	pub text: String,
+	pub arg: String,
+	pub loc: String,
 }
 
 impl Event {
@@ -274,12 +302,12 @@ mod tests {
 	#[test]
 	#[ignore]
 	fn new() {
-		let mut w = Win::new().unwrap();
+		let (mut w, mut wev) = Win::new().unwrap();
 		w.name("testing").unwrap();
 		w.write(File::Body, "blah hello done hello".to_string())
 			.unwrap();
 		loop {
-			let mut ev = w.read_event().unwrap();
+			let mut ev = wev.read_event().unwrap();
 			println!("ev: {:?}", ev);
 			match ev.c2 {
 				'x' | 'X' => {
@@ -288,12 +316,12 @@ mod tests {
 						break;
 					}
 					println!("cmd text: {}", ev.text);
-					w.write_event(ev).unwrap();
+					wev.write_event(ev).unwrap();
 				}
 				'l' | 'L' => {
 					ev.load_text();
 					println!("look: {}", ev.text);
-					w.write_event(ev).unwrap();
+					wev.write_event(ev).unwrap();
 				}
 				_ => {}
 			}

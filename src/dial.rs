@@ -6,16 +6,15 @@ use crate::{
 };
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::cell::RefCell;
 use std::env;
 use std::os::unix::net::UnixStream;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 pub fn dial(addr: &str) -> Result<RcConn> {
 	let stream = UnixStream::connect(addr)?;
 	let conn = Conn::new(stream)?;
 	Ok(RcConn {
-		rc: Rc::new(RefCell::new(conn)),
+		rc: Arc::new(Mutex::new(conn)),
 	})
 }
 

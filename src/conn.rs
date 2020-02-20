@@ -4,25 +4,20 @@ extern crate nine;
 use crate::{err_str, fid, fsys, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use nine::{de::*, p2000::*, ser::*};
-use std::cell::RefCell;
 use std::fmt::Debug;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-pub struct Conn<Stream>
-where
-	Stream: Write,
-	for<'a> &'a mut Stream: Read,
-{
-	stream: Stream,
+pub struct Conn {
+	stream: UnixStream,
 	msg_buf: Vec<u8>,
 	pub msize: u32,
 	nextfid: u32,
 }
 
-impl<Stream: Write + Read> Conn<Stream> {
-	pub fn new(stream: Stream) -> Result<Self> {
+impl Conn {
+	pub fn new(stream: UnixStream) -> Result<Self> {
 		let mut c = Conn {
 			stream,
 			msg_buf: Vec::new(),
@@ -103,11 +98,11 @@ pub struct RcConn {
 	pub rc: RefConn,
 }
 
-pub type RefConn = Rc<RefCell<Conn<UnixStream>>>;
+pub type RefConn = Arc<Mutex<Conn>>;
 
 impl RcConn {
 	pub fn attach(&mut self, user: String, aname: String) -> Result<fsys::Fsys> {
-		let mut c = self.rc.borrow_mut();
+		let mut c = self.rc.lock().unwrap();
 		let newfid = c.newfid();
 		let attach = Tattach {
 			tag: 0,
@@ -120,14 +115,14 @@ impl RcConn {
 		let r = c.rpc::<Tattach, Rattach>(&attach)?;
 
 		Ok(fsys::Fsys {
-			fid: fid::Fid::new(Rc::clone(&self.rc), newfid, r.qid),
+			fid: fid::Fid::new(Arc::clone(&self.rc), newfid, r.qid),
 		})
 	}
 }
 
 const NOFID: u32 = !0;
 
-impl<Stream: Write + Read> Conn<Stream> {
+impl Conn {
 	pub fn walk(&mut self, fid: u32, newfid: u32, wname: Vec<String>) -> Result<Vec<Qid>> {
 		let walk = Twalk {
 			tag: 0,

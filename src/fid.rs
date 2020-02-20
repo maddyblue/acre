@@ -5,7 +5,7 @@ use nine::p2000::{OpenMode, Qid};
 use std::cmp;
 use std::env;
 use std::io;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn get_user() -> String {
 	env::var("USER").unwrap()
@@ -31,7 +31,7 @@ impl Fid {
 		}
 	}
 	pub fn walk(&mut self, name: &str) -> Result<Fid> {
-		let mut c = self.c.borrow_mut();
+		let mut c = self.c.lock().unwrap();
 		let wfid = c.newfid();
 		let mut fid = self.fid;
 
@@ -59,11 +59,11 @@ impl Fid {
 			}
 			fid = wfid;
 		}
-		Ok(Fid::new(Rc::clone(&self.c), wfid, qid))
+		Ok(Fid::new(Arc::clone(&self.c), wfid, qid))
 	}
 
 	pub fn open(&mut self, mode: OpenMode) -> Result<()> {
-		let mut c = self.c.borrow_mut();
+		let mut c = self.c.lock().unwrap();
 		c.open(self.fid, mode)?;
 		self.mode = mode;
 		Ok(())
@@ -74,7 +74,7 @@ const IOHDRSZ: u32 = 24;
 
 impl io::Read for Fid {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		let mut c = self.c.borrow_mut();
+		let mut c = self.c.lock().unwrap();
 		let msize = c.msize - IOHDRSZ;
 		let n: u32 = cmp::min(buf.len() as u32, msize);
 		let data = match c.read(self.fid, self.offset, n) {
@@ -91,7 +91,7 @@ impl io::Read for Fid {
 
 impl io::Write for Fid {
 	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-		let mut c = self.c.borrow_mut();
+		let mut c = self.c.lock().unwrap();
 		let msize = (c.msize - IOHDRSZ) as usize;
 		let mut tot: usize = 0;
 		let n = buf.len();
@@ -115,7 +115,7 @@ impl io::Write for Fid {
 
 impl Drop for Fid {
 	fn drop(&mut self) {
-		let mut c = self.c.borrow_mut();
+		let mut c = self.c.lock().unwrap();
 		let _ = c.clunk(self.fid);
 	}
 }
