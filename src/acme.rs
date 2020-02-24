@@ -180,7 +180,7 @@ impl WinEvents {
 }
 
 impl Win {
-	pub fn new() -> Result<(Win, WinEvents)> {
+	pub fn new() -> Result<Win> {
 		let mut fsys = mount()?;
 		let mut fid = fsys.open("new/ctl", OpenMode::RDWR)?;
 		let mut buf = [0; 100];
@@ -194,25 +194,25 @@ impl Win {
 		Win::open(&mut fsys, id, fid)
 	}
 	// open connects to the existing window with the given id.
-	pub fn open(fsys: &mut Fsys, id: usize, ctl: Fid) -> Result<(Win, WinEvents)> {
+	pub fn open(fsys: &mut Fsys, id: usize, ctl: Fid) -> Result<Win> {
 		let body = fsys.open(format!("{}/body", id).as_str(), OpenMode::RDWR)?;
 		let addr = fsys.open(format!("{}/addr", id).as_str(), OpenMode::RDWR)?;
-		let event = fsys.open(format!("{}/event", id).as_str(), OpenMode::RDWR)?;
 		let data = fsys.open(format!("{}/data", id).as_str(), OpenMode::RDWR)?;
 		let tag = fsys.open(format!("{}/tag", id).as_str(), OpenMode::RDWR)?;
-		Ok((
-			Win {
-				id,
-				ctl,
-				body,
-				addr,
-				data,
-				tag,
-			},
-			WinEvents { event },
-		))
+		Ok(Win {
+			id,
+			ctl,
+			body,
+			addr,
+			data,
+			tag,
+		})
 	}
-
+	pub fn events(&mut self) -> Result<WinEvents> {
+		let mut fsys = mount()?;
+		let event = fsys.open(format!("{}/event", self.id).as_str(), OpenMode::RDWR)?;
+		Ok(WinEvents { event })
+	}
 	pub fn id(&self) -> usize {
 		self.id
 	}

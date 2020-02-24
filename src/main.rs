@@ -35,8 +35,9 @@ impl Server {
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
-		let (mut w, mut wev) = Win::new()?;
+		let mut w = Win::new()?;
 		w.name("acre")?;
+		let mut wev = w.events()?;
 		let s = Server {
 			w,
 			ws: HashMap::new(),
@@ -114,7 +115,7 @@ impl Server {
 				None => {
 					let mut fsys = mount()?;
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
-					let (w, _) = Win::open(&mut fsys, wi.id, ctl)?;
+					let w = Win::open(&mut fsys, wi.id, ctl)?;
 					ServerWin {
 						name: wi.name,
 						id: wi.id,
