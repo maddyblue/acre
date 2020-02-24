@@ -1,10 +1,12 @@
 use crate::dial;
 use crate::{err_str, fid::Fid, fsys::Fsys, Result};
+use lazy_static::lazy_static;
 use nine::p2000::OpenMode;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::Mutex;
 
-pub fn mount() -> Result<Fsys> {
-	dial::mount_service("acme")
+lazy_static! {
+	pub static ref FSYS: Mutex<Fsys> = Mutex::new(dial::mount_service("acme").unwrap());
 }
 
 #[derive(Debug)]
@@ -15,8 +17,7 @@ pub struct WinInfo {
 
 impl WinInfo {
 	pub fn windows() -> Result<Vec<WinInfo>> {
-		let mut fsys = mount()?;
-		let index = fsys.open("index", OpenMode::READ)?;
+		let index = FSYS.lock().unwrap().open("index", OpenMode::READ)?;
 		let r = BufReader::new(index);
 		let mut ws = Vec::new();
 		for line in r.lines() {
@@ -49,8 +50,7 @@ pub struct LogEvent {
 
 impl LogReader {
 	pub fn new() -> Result<LogReader> {
-		let mut fsys = mount()?;
-		let log = fsys.open("log", OpenMode::READ)?;
+		let log = FSYS.lock().unwrap().open("log", OpenMode::READ)?;
 		Ok(LogReader {
 			f: log,
 			buf: [0; 8192],
@@ -181,7 +181,7 @@ impl WinEvents {
 
 impl Win {
 	pub fn new() -> Result<Win> {
-		let mut fsys = mount()?;
+		let mut fsys = FSYS.lock().unwrap();
 		let mut fid = fsys.open("new/ctl", OpenMode::RDWR)?;
 		let mut buf = [0; 100];
 		let sz = fid.read(&mut buf)?;
@@ -209,8 +209,10 @@ impl Win {
 		})
 	}
 	pub fn events(&mut self) -> Result<WinEvents> {
-		let mut fsys = mount()?;
-		let event = fsys.open(format!("{}/event", self.id).as_str(), OpenMode::RDWR)?;
+		let event = FSYS
+			.lock()
+			.unwrap()
+			.open(format!("{}/event", self.id).as_str(), OpenMode::RDWR)?;
 		Ok(WinEvents { event })
 	}
 	pub fn id(&self) -> usize {

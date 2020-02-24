@@ -113,7 +113,7 @@ impl Server {
 			let w = match self.ws.remove(&wi.id) {
 				Some(w) => w,
 				None => {
-					let mut fsys = mount()?;
+					let mut fsys = FSYS.lock().unwrap();
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
 					ServerWin {
