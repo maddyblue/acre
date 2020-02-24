@@ -1,6 +1,3 @@
-extern crate byteorder;
-extern crate nine;
-
 use crate::{err_str, fid, fsys, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use crossbeam_channel::{bounded, Receiver, Sender};

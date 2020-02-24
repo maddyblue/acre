@@ -1,5 +1,3 @@
-extern crate nine;
-
 use crate::{fid::Fid, Result};
 use nine::p2000::OpenMode;
 

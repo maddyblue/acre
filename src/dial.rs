@@ -1,5 +1,3 @@
-extern crate regex;
-
 use crate::{conn::Conn, fid, fsys, Result};
 use lazy_static::lazy_static;
 use regex::Regex;

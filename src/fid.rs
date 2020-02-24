@@ -1,5 +1,3 @@
-extern crate nine;
-
 use crate::{conn::Conn, Result};
 use nine::p2000::{OpenMode, Qid};
 use std::cmp;
