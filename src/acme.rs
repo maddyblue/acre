@@ -76,6 +76,7 @@ pub struct Win {
 	body: Fid,
 	addr: Fid,
 	data: Fid,
+	tag: Fid,
 }
 
 pub enum File {
@@ -83,6 +84,7 @@ pub enum File {
 	Body,
 	Addr,
 	Data,
+	Tag,
 }
 
 pub struct WinEvents {
@@ -197,6 +199,7 @@ impl Win {
 		let addr = fsys.open(format!("{}/addr", id).as_str(), OpenMode::RDWR)?;
 		let event = fsys.open(format!("{}/event", id).as_str(), OpenMode::RDWR)?;
 		let data = fsys.open(format!("{}/data", id).as_str(), OpenMode::RDWR)?;
+		let tag = fsys.open(format!("{}/tag", id).as_str(), OpenMode::RDWR)?;
 		Ok((
 			Win {
 				id,
@@ -204,6 +207,7 @@ impl Win {
 				body,
 				addr,
 				data,
+				tag,
 			},
 			WinEvents { event },
 		))
@@ -223,6 +227,7 @@ impl Win {
 			File::Body => &mut self.body,
 			File::Addr => &mut self.addr,
 			File::Data => &mut self.data,
+			File::Tag => &mut self.tag,
 		}
 	}
 	pub fn ctl(&mut self, data: String) -> Result<()> {

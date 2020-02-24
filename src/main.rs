@@ -35,7 +35,8 @@ impl Server {
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
-		let (w, mut wev) = Win::new()?;
+		let (mut w, mut wev) = Win::new()?;
+		w.name("acre")?;
 		let s = Server {
 			w,
 			ws: HashMap::new(),
@@ -68,15 +69,19 @@ impl Server {
 			let mut ev = wev.read_event().unwrap();
 			println!("window event: {:?}", ev);
 			match ev.c2 {
-				'x' | 'X' => {
-					if ev.text == "Del" {
+				'x' | 'X' => match ev.text.as_str() {
+					"Del" => {
 						return;
 					}
-					wev.write_event(ev).unwrap();
-				}
+					"Get" => {
+						ev_s.send(ev).unwrap();
+					}
+					_ => {
+						wev.write_event(ev).unwrap();
+					}
+				},
 				'L' => {
 					ev.load_text();
-					println!("look: {}", ev.text);
 					ev_s.send(ev).unwrap();
 				}
 				_ => {}
@@ -92,6 +97,8 @@ impl Server {
 		write!(&mut body, "-----\n\n")?;
 		self.w.clear()?;
 		self.w.write(File::Body, body)?;
+		self.w.ctl("cleartag".to_string())?;
+		self.w.write(File::Tag, " Get".to_string())?;
 		Ok(())
 	}
 	fn sync_windows(&mut self) -> Result<()> {
@@ -122,6 +129,14 @@ impl Server {
 	}
 	fn run_cmd(&mut self, ev: Event) -> Result<()> {
 		match ev.c2 {
+			'x' | 'X' => match ev.text.as_str() {
+				"Get" => {
+					self.sync_windows()?;
+				}
+				_ => {
+					panic!("unexpected");
+				}
+			},
 			'L' => match ev.text.as_str() {
 				"define" => {}
 				_ => {}
@@ -164,8 +179,3 @@ impl Drop for Server {
 		let _ = self.w.del(true);
 	}
 }
-
-/*
-Start a thread that listens for log reader changes. On window create or destroy, re-run sync.
-Start a thread that listens for w events. On look, do the thing.
-*/
