@@ -2,7 +2,9 @@
 extern crate crossbeam_channel;
 
 use crossbeam_channel::{bounded, Receiver};
+use nine::p2000::OpenMode;
 use plan9::acme::*;
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::thread::spawn;
 
@@ -16,9 +18,16 @@ fn main() -> Result<()> {
 
 struct Server {
 	w: Win,
+	ws: HashMap<usize, ServerWin>,
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
 	err_r: Receiver<Error>,
+}
+
+struct ServerWin {
+	name: String,
+	id: usize,
+	w: Win,
 }
 
 impl Server {
@@ -29,6 +38,7 @@ impl Server {
 		let (w, mut wev) = Win::new()?;
 		let s = Server {
 			w,
+			ws: HashMap::new(),
 			log_r,
 			ev_r,
 			err_r,
@@ -40,9 +50,12 @@ impl Server {
 				match log.read() {
 					Ok(ev) => match ev.op.as_str() {
 						"new" | "del" => {
+							println!("sending log event: {:?}", ev);
 							log_s.send(ev).unwrap();
 						}
-						_ => {}
+						_ => {
+							println!("log event: {:?}", ev);
+						}
 					},
 					Err(err) => {
 						err_s1.send(err).unwrap();
@@ -61,7 +74,7 @@ impl Server {
 					}
 					wev.write_event(ev).unwrap();
 				}
-				'l' | 'L' => {
+				'L' => {
 					ev.load_text();
 					println!("look: {}", ev.text);
 					ev_s.send(ev).unwrap();
@@ -73,33 +86,64 @@ impl Server {
 	}
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
-		let ws = WinInfo::windows()?;
-		for win in &ws {
-			if !win.name.ends_with(".go") {
-				continue;
-			}
-			println!("{}", win.name);
-			write!(&mut body, "{}\n\n", win.name)?;
+		for (_, win) in &self.ws {
+			write!(&mut body, "{}\n\t[define] [describe]\n", win.name)?;
 		}
-		println!("clearing");
+		write!(&mut body, "-----\n\n")?;
 		self.w.clear()?;
-		println!("write to body: {}", body);
 		self.w.write(File::Body, body)?;
 		Ok(())
 	}
+	fn sync_windows(&mut self) -> Result<()> {
+		println!("sync windows");
+		let mut ws = HashMap::new();
+		for wi in WinInfo::windows()? {
+			if !wi.name.ends_with(".go") {
+				continue;
+			}
+			println!("found {}", wi.name);
+			let w = match self.ws.remove(&wi.id) {
+				Some(w) => w,
+				None => {
+					let mut fsys = mount()?;
+					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
+					let (w, _) = Win::open(&mut fsys, wi.id, ctl)?;
+					ServerWin {
+						name: wi.name,
+						id: wi.id,
+						w,
+					}
+				}
+			};
+			ws.insert(wi.id, w);
+		}
+		self.ws = ws;
+		Ok(())
+	}
+	fn run_cmd(&mut self, ev: Event) -> Result<()> {
+		match ev.c2 {
+			'L' => match ev.text.as_str() {
+				"define" => {}
+				_ => {}
+			},
+			_ => {}
+		}
+		Ok(())
+	}
 	fn wait(&mut self) -> Result<()> {
-		self.sync()?;
+		self.sync_windows()?;
 		loop {
+			self.sync()?;
 			select! {
 				recv(self.log_r) -> msg => {
 					match msg {
-						Ok(_) => { self.sync()?;},
+						Ok(_) => { self.sync_windows()?;},
 						Err(_) => { println!("log_r closed"); break;},
 					};
 				},
 				recv(self.ev_r) -> msg => {
 					match msg {
-						Ok(_) => {},
+						Ok(ev) => { self.run_cmd(ev)?; },
 						Err(_) => { println!("ev_r closed"); break;},
 					};
 				},
@@ -111,9 +155,13 @@ impl Server {
 				},
 			}
 		}
-		self.w.del(true)?;
-
 		Ok(())
+	}
+}
+
+impl Drop for Server {
+	fn drop(&mut self) {
+		let _ = self.w.del(true);
 	}
 }
 

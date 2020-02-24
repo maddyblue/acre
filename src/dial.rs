@@ -1,24 +1,17 @@
 extern crate regex;
 
-use crate::{
-	conn::{Conn, RcConn},
-	fid, fsys, Result,
-};
+use crate::{conn::Conn, fid, fsys, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::env;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
 
-pub fn dial(addr: &str) -> Result<RcConn> {
+pub fn dial(addr: &str) -> Result<Conn> {
 	let stream = UnixStream::connect(addr)?;
-	let conn = Conn::new(stream)?;
-	Ok(RcConn {
-		rc: Arc::new(Mutex::new(conn)),
-	})
+	Conn::new(stream)
 }
 
-pub fn dial_service(service: &str) -> Result<RcConn> {
+pub fn dial_service(service: &str) -> Result<Conn> {
 	let ns = namespace();
 	dial((ns + "/" + service).as_str())
 }

@@ -1,18 +1,17 @@
 extern crate nine;
 
-use crate::{conn::RefConn, Result};
+use crate::{conn::Conn, Result};
 use nine::p2000::{OpenMode, Qid};
 use std::cmp;
 use std::env;
 use std::io;
-use std::sync::Arc;
 
 pub fn get_user() -> String {
 	env::var("USER").unwrap()
 }
 
 pub struct Fid {
-	pub c: RefConn,
+	pub c: Conn,
 
 	pub qid: Qid,
 	pub fid: u32,
@@ -21,9 +20,9 @@ pub struct Fid {
 }
 
 impl Fid {
-	pub fn new(c: RefConn, fid: u32, qid: Qid) -> Fid {
+	pub fn new(c: Conn, fid: u32, qid: Qid) -> Fid {
 		Fid {
-			c,
+			c: c.clone(),
 			qid,
 			fid,
 			mode: OpenMode::READ,
@@ -31,8 +30,7 @@ impl Fid {
 		}
 	}
 	pub fn walk(&mut self, name: &str) -> Result<Fid> {
-		let mut c = self.c.lock().unwrap();
-		let wfid = c.newfid();
+		let wfid = self.c.newfid();
 		let mut fid = self.fid;
 
 		let name = String::from(name);
@@ -48,7 +46,7 @@ impl Fid {
 			let n = cmp::min(elem.len(), MAXWELEM);
 			let wname = elem[0..n].to_vec();
 			elem.drain(0..n);
-			let qids = c.walk(fid, wfid, wname)?;
+			let qids = self.c.walk(fid, wfid, wname)?;
 			qid = if n == 0 {
 				self.qid.clone()
 			} else {
@@ -59,12 +57,11 @@ impl Fid {
 			}
 			fid = wfid;
 		}
-		Ok(Fid::new(Arc::clone(&self.c), wfid, qid))
+		Ok(Fid::new(self.c.clone(), wfid, qid))
 	}
 
 	pub fn open(&mut self, mode: OpenMode) -> Result<()> {
-		let mut c = self.c.lock().unwrap();
-		c.open(self.fid, mode)?;
+		self.c.open(self.fid, mode)?;
 		self.mode = mode;
 		Ok(())
 	}
@@ -74,10 +71,9 @@ const IOHDRSZ: u32 = 24;
 
 impl io::Read for Fid {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		let mut c = self.c.lock().unwrap();
-		let msize = c.msize - IOHDRSZ;
+		let msize = self.c.msize - IOHDRSZ;
 		let n: u32 = cmp::min(buf.len() as u32, msize);
-		let data = match c.read(self.fid, self.offset, n) {
+		let data = match self.c.read(self.fid, self.offset, n) {
 			Ok(r) => r,
 			Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))),
 		};
@@ -91,14 +87,16 @@ impl io::Read for Fid {
 
 impl io::Write for Fid {
 	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-		let mut c = self.c.lock().unwrap();
-		let msize = (c.msize - IOHDRSZ) as usize;
+		let msize = (self.c.msize - IOHDRSZ) as usize;
 		let mut tot: usize = 0;
 		let n = buf.len();
 		let mut first = true;
 		while tot < n || first {
 			let want: usize = cmp::min(n - tot, msize);
-			let got = match c.write(self.fid, self.offset, buf[tot..tot + want].to_vec()) {
+			let got = match self
+				.c
+				.write(self.fid, self.offset, buf[tot..tot + want].to_vec())
+			{
 				Ok(r) => r as usize,
 				Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))),
 			};
@@ -115,7 +113,6 @@ impl io::Write for Fid {
 
 impl Drop for Fid {
 	fn drop(&mut self) {
-		let mut c = self.c.lock().unwrap();
-		let _ = c.clunk(self.fid);
+		let _ = self.c.clunk(self.fid);
 	}
 }

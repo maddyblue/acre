@@ -12,24 +12,31 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+#[derive(Clone)]
 pub struct Conn {
-	stream: UnixStream,
-	msg_buf: Vec<u8>,
+	writer: Arc<Mutex<ConnWriter>>,
 	pub msize: u32,
+	tag_map: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
+}
+
+struct ConnWriter {
+	msg_buf: Vec<u8>,
+	stream: UnixStream,
 	nextfid: u32,
 	next_tag: u16,
-	tag_map: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
 }
 
 impl Conn {
 	pub fn new(stream: UnixStream) -> Result<Self> {
 		let mut reader = stream.try_clone()?;
 		let mut c = Conn {
-			stream,
-			msg_buf: Vec::new(),
+			writer: Arc::new(Mutex::new(ConnWriter {
+				msg_buf: Vec::new(),
+				stream,
+				nextfid: 1,
+				next_tag: 0,
+			})),
 			msize: 131072,
-			nextfid: 1,
-			next_tag: 0,
 			tag_map: Arc::new(Mutex::new(HashMap::new())),
 		};
 		let tm = Arc::clone(&c.tag_map);
@@ -79,11 +86,12 @@ impl Conn {
 	}
 
 	fn new_tag(&mut self) -> Result<(u16, Receiver<Vec<u8>>)> {
-		if self.next_tag == NOTAG {
+		let mut cw = self.writer.lock().unwrap();
+		if cw.next_tag == NOTAG {
 			return Err(err_str(format!("out of tags")));
 		}
-		let tag = self.next_tag;
-		self.next_tag += 1;
+		let tag = cw.next_tag;
+		cw.next_tag += 1;
 		let (s, r) = bounded(0);
 		self.tag_map.lock().unwrap().insert(tag, s);
 		Ok((tag, r))
@@ -103,13 +111,16 @@ impl Conn {
 	}
 
 	fn send_msg<T: Serialize + MessageTypeId + Debug>(&mut self, t: &T) -> Result<()> {
-		self.msg_buf.truncate(0);
-		let amt = into_vec(&t, &mut self.msg_buf)?;
+		let mut cw = self.writer.lock().unwrap();
+		cw.msg_buf.truncate(0);
+		let amt = into_vec(&t, &mut cw.msg_buf)?;
 
 		assert!(self.msize >= amt);
-		self.stream.write_u32::<LittleEndian>(amt + 5)?;
-		self.stream.write_u8(<T as MessageTypeId>::MSG_TYPE_ID)?;
-		Ok(self.stream.write_all(&self.msg_buf[0..amt as usize])?)
+		cw.stream.write_u32::<LittleEndian>(amt + 5)?;
+		cw.stream.write_u8(<T as MessageTypeId>::MSG_TYPE_ID)?;
+		// Avoid a reference immutable/mutable borrowing problem.
+		let mut stream = &cw.stream;
+		Ok(stream.write_all(&cw.msg_buf[0..amt as usize])?)
 	}
 
 	fn read_msg<'de, T: Deserialize<'de> + MessageTypeId + Debug>(
@@ -141,33 +152,9 @@ impl Conn {
 	}
 
 	pub fn newfid(&mut self) -> u32 {
-		self.nextfid += 1;
-		self.nextfid
-	}
-}
-
-pub struct RcConn {
-	pub rc: RefConn,
-}
-
-pub type RefConn = Arc<Mutex<Conn>>;
-
-impl RcConn {
-	pub fn attach(&mut self, user: String, aname: String) -> Result<fsys::Fsys> {
-		let mut c = self.rc.lock().unwrap();
-		let newfid = c.newfid();
-		let (tag, r) = c.new_tag()?;
-		let attach = Tattach {
-			tag: tag,
-			fid: newfid,
-			afid: NOFID,
-			uname: user.into(),
-			aname: aname.into(),
-		};
-		let r = c.rpc::<Tattach, Rattach>(&attach, r)?;
-		Ok(fsys::Fsys {
-			fid: fid::Fid::new(Arc::clone(&self.rc), newfid, r.qid),
-		})
+		let mut cw = self.writer.lock().unwrap();
+		cw.nextfid += 1;
+		cw.nextfid
 	}
 }
 
@@ -222,5 +209,20 @@ impl Conn {
 		let clunk = Tclunk { tag: tag, fid };
 		self.rpc::<Tclunk, Rclunk>(&clunk, r)?;
 		Ok(())
+	}
+	pub fn attach(&mut self, user: String, aname: String) -> Result<fsys::Fsys> {
+		let newfid = self.newfid();
+		let (tag, r) = self.new_tag()?;
+		let attach = Tattach {
+			tag: tag,
+			fid: newfid,
+			afid: NOFID,
+			uname: user.into(),
+			aname: aname.into(),
+		};
+		let r = self.rpc::<Tattach, Rattach>(&attach, r)?;
+		Ok(fsys::Fsys {
+			fid: fid::Fid::new(self.clone(), newfid, r.qid),
+		})
 	}
 }

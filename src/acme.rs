@@ -3,7 +3,7 @@ use crate::{err_str, fid::Fid, fsys::Fsys, Result};
 use nine::p2000::OpenMode;
 use std::io::{BufRead, BufReader, Read, Write};
 
-fn mount() -> Result<Fsys> {
+pub fn mount() -> Result<Fsys> {
 	dial::mount_service("acme")
 }
 
@@ -232,11 +232,8 @@ impl Win {
 		self.write(File::Addr, format!("{}\n", data))
 	}
 	pub fn clear(&mut self) -> Result<()> {
-		println!("set addr");
 		self.write(File::Addr, format!(","))?;
-		println!("clear data");
 		self.write(File::Data, format!(""))?;
-		println!("done");
 		Ok(())
 	}
 	pub fn name(&mut self, name: &str) -> Result<()> {
