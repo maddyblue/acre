@@ -41,7 +41,7 @@ struct ServerWin {
 
 impl ServerWin {
 	fn pos(&mut self) -> Result<(usize, usize)> {
-		self.w.ctl("addr=dot".to_string())?;
+		self.w.ctl("addr=dot")?;
 		// TODO: convert these character (rune) offsets to byte offsets.
 		self.w.read_addr()
 	}
@@ -133,9 +133,9 @@ impl Server {
 			write!(&mut body, "\n{}\n", s)?;
 		}
 		self.w.clear()?;
-		self.w.write(File::Body, body)?;
-		self.w.ctl("cleartag\nclean".to_string())?;
-		self.w.write(File::Tag, " Get".to_string())?;
+		self.w.write(File::Body, &body)?;
+		self.w.ctl("cleartag\nclean")?;
+		self.w.write(File::Tag, " Get")?;
 		Ok(())
 	}
 	fn sync_windows(&mut self) -> Result<()> {

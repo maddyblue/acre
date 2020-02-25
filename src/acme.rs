@@ -218,7 +218,7 @@ impl Win {
 	pub fn id(&self) -> usize {
 		self.id
 	}
-	pub fn write(&mut self, file: File, data: String) -> Result<()> {
+	pub fn write(&mut self, file: File, data: &str) -> Result<()> {
 		let f = self.fid(file);
 		f.write(data.as_bytes())?;
 		Ok(())
@@ -232,23 +232,23 @@ impl Win {
 			File::Tag => &mut self.tag,
 		}
 	}
-	pub fn ctl(&mut self, data: String) -> Result<()> {
-		self.write(File::Ctl, format!("{}\n", data))
+	pub fn ctl(&mut self, data: &str) -> Result<()> {
+		self.write(File::Ctl, &format!("{}\n", data))
 	}
-	pub fn addr(&mut self, data: String) -> Result<()> {
-		self.write(File::Addr, format!("{}\n", data))
+	pub fn addr(&mut self, data: &str) -> Result<()> {
+		self.write(File::Addr, &format!("{}\n", data))
 	}
 	pub fn clear(&mut self) -> Result<()> {
-		self.write(File::Addr, format!(","))?;
-		self.write(File::Data, format!(""))?;
+		self.write(File::Addr, &format!(","))?;
+		self.write(File::Data, &format!(""))?;
 		Ok(())
 	}
 	pub fn name(&mut self, name: &str) -> Result<()> {
-		self.ctl(format!("name {}", name))
+		self.ctl(&format!("name {}", name))
 	}
 	pub fn del(&mut self, sure: bool) -> Result<()> {
 		let cmd = if sure { "delete" } else { "del" };
-		self.ctl(cmd.to_string())
+		self.ctl(cmd)
 	}
 	pub fn read_addr(&mut self) -> Result<(usize, usize)> {
 		let mut buf: [u8; 40] = [0; 40];
@@ -320,8 +320,7 @@ mod tests {
 	fn new() {
 		let (mut w, mut wev) = Win::new().unwrap();
 		w.name("testing").unwrap();
-		w.write(File::Body, "blah hello done hello".to_string())
-			.unwrap();
+		w.write(File::Body, "blah hello done hello").unwrap();
 		loop {
 			let mut ev = wev.read_event().unwrap();
 			println!("ev: {:?}", ev);
