@@ -198,8 +198,14 @@ impl Server {
 				let addr = sw.pos()?;
 				let pos = format!("{}:#{}", sw.name, addr.0);
 				let res = Command::new("guru").arg(ev.text).arg(&pos).output()?;
-				let out = std::str::from_utf8(&res.stdout)?.trim();
-				self.output.push(out.to_string());
+				let mut out = std::str::from_utf8(&res.stdout)?.trim().to_string();
+				if out.len() == 0 {
+					out = format!("{}: {}", pos, std::str::from_utf8(&res.stderr)?.trim());
+				}
+				self.output.insert(0, out);
+				if self.output.len() > 5 {
+					self.output.drain(5..);
+				}
 			}
 			_ => {}
 		}
