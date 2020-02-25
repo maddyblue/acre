@@ -134,7 +134,7 @@ impl Server {
 		}
 		self.w.clear()?;
 		self.w.write(File::Body, body)?;
-		self.w.ctl("cleartag".to_string())?;
+		self.w.ctl("cleartag\nclean".to_string())?;
 		self.w.write(File::Tag, " Get".to_string())?;
 		Ok(())
 	}
