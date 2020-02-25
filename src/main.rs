@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate crossbeam_channel;
 
-use crossbeam_channel::{bounded, Receiver};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use nine::p2000::OpenMode;
 use plan9::acme::*;
 use plan9::plumb;
@@ -31,6 +31,8 @@ struct Server {
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
+	guru_r: Receiver<String>,
+	guru_s: Sender<String>,
 	err_r: Receiver<Error>,
 }
 
@@ -52,6 +54,7 @@ impl Server {
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
+		let (guru_s, guru_r) = bounded(0);
 		let mut w = Win::new()?;
 		w.name("acre")?;
 		let mut wev = w.events()?;
@@ -64,6 +67,8 @@ impl Server {
 			focus: "".to_string(),
 			log_r,
 			ev_r,
+			guru_r,
+			guru_s,
 			err_r,
 		};
 		let err_s1 = err_s.clone();
@@ -195,15 +200,22 @@ impl Server {
 				let sw = self.ws.get_mut(&wid).unwrap();
 				let addr = sw.pos()?;
 				let pos = format!("{}:#{}", sw.name, addr.0);
-				let res = Command::new("guru").arg(ev.text).arg(&pos).output()?;
-				let mut out = std::str::from_utf8(&res.stdout)?.trim().to_string();
-				if out.len() == 0 {
-					out = format!("{}: {}", pos, std::str::from_utf8(&res.stderr)?.trim());
-				}
-				self.output.insert(0, out);
-				if self.output.len() > 5 {
-					self.output.drain(5..);
-				}
+				let guru_s = self.guru_s.clone();
+				thread::spawn(move || {
+					let res = || -> Result<String> {
+						let res = Command::new("guru").arg(ev.text).arg(&pos).output()?;
+						let mut out = std::str::from_utf8(&res.stdout)?.trim().to_string();
+						if out.len() == 0 {
+							out = format!("{}: {}", pos, std::str::from_utf8(&res.stderr)?.trim());
+						}
+						Ok(out)
+					}();
+					let out = match res {
+						Ok(s) => s,
+						Err(e) => format!("{}", e),
+					};
+					guru_s.send(out).unwrap();
+				});
 			}
 			_ => {}
 		}
@@ -231,6 +243,17 @@ impl Server {
 					match msg {
 						Ok(ev) => { self.run_cmd(ev)?; },
 						Err(_) => { println!("ev_r closed"); break;},
+					};
+				},
+				recv(self.guru_r) -> msg => {
+					match msg {
+						Ok(s) => {
+							self.output.insert(0, s);
+							if self.output.len() > 5 {
+								self.output.drain(5..);
+							}
+						},
+						Err(_) => {println!("guru_r closed"); break;},
 					};
 				},
 				recv(self.err_r) -> msg => {
