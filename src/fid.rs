@@ -83,6 +83,28 @@ impl io::Read for Fid {
 	}
 }
 
+impl io::Seek for Fid {
+	fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
+		match pos {
+			io::SeekFrom::Start(n) => self.offset = n,
+			io::SeekFrom::Current(n) => {
+				if n >= 0 {
+					self.offset += n as u64;
+				} else {
+					self.offset -= n as u64;
+				}
+			}
+			io::SeekFrom::End(_) => {
+				return Err(io::Error::new(
+					io::ErrorKind::Other,
+					format!("seeking to end unsupported"),
+				))
+			}
+		}
+		Ok(self.offset)
+	}
+}
+
 impl io::Write for Fid {
 	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
 		let msize = (self.c.msize - IOHDRSZ) as usize;

@@ -2,7 +2,7 @@ use crate::dial;
 use crate::{err_str, fid::Fid, fsys::Fsys, Result};
 use lazy_static::lazy_static;
 use nine::p2000::OpenMode;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::sync::Mutex;
 
 lazy_static! {
@@ -249,6 +249,18 @@ impl Win {
 	pub fn del(&mut self, sure: bool) -> Result<()> {
 		let cmd = if sure { "delete" } else { "del" };
 		self.ctl(cmd.to_string())
+	}
+	pub fn read_addr(&mut self) -> Result<(usize, usize)> {
+		let mut buf: [u8; 40] = [0; 40];
+		let f = self.fid(File::Addr);
+		f.seek(SeekFrom::Start(0))?;
+		let sz = f.read(&mut buf)?;
+		let addr = std::str::from_utf8(&buf[0..sz])?;
+		let a: Vec<&str> = addr.split_whitespace().collect();
+		if a.len() < 2 {
+			return Err(err_str(format!("short read from acme addr")));
+		}
+		Ok((a[0].parse()?, a[1].parse()?))
 	}
 }
 

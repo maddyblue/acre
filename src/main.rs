@@ -6,6 +6,7 @@ use nine::p2000::OpenMode;
 use plan9::acme::*;
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::process::Command;
 use std::thread;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -19,6 +20,13 @@ fn main() -> Result<()> {
 struct Server {
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
+	// Sorted Vec of (names, win id) to know which order to print windows in.
+	names: Vec<(String, usize)>,
+	// Vec of (position, win id) to map Look locations to windows.
+	addr: Vec<(usize, usize)>,
+
+	output: Vec<String>,
+
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
 	err_r: Receiver<Error>,
@@ -28,6 +36,14 @@ struct ServerWin {
 	name: String,
 	id: usize,
 	w: Win,
+}
+
+impl ServerWin {
+	fn pos(&mut self) -> Result<(usize, usize)> {
+		self.w.ctl("addr=dot".to_string())?;
+		// TODO: convert these character (rune) offsets to byte offsets.
+		self.w.read_addr()
+	}
 }
 
 impl Server {
@@ -41,6 +57,9 @@ impl Server {
 		let s = Server {
 			w,
 			ws: HashMap::new(),
+			names: vec![],
+			addr: vec![],
+			output: vec![],
 			log_r,
 			ev_r,
 			err_r,
@@ -98,10 +117,20 @@ impl Server {
 	}
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
-		for (_, win) in &self.ws {
-			write!(&mut body, "{}\n\t[define] [describe]\n", win.name)?;
+		self.addr.clear();
+		for (name, id) in &self.names {
+			self.addr.push((body.len(), *id));
+			write!(
+				&mut body,
+				"{}\n\t[definition] [describe] [referrers]\n",
+				name
+			)?;
 		}
-		write!(&mut body, "-----\n\n")?;
+		self.addr.push((body.len(), 0));
+		write!(&mut body, "-----\n")?;
+		for s in &self.output {
+			write!(&mut body, "\n{}\n", s)?;
+		}
 		self.w.clear()?;
 		self.w.write(File::Body, body)?;
 		self.w.ctl("cleartag".to_string())?;
@@ -111,11 +140,14 @@ impl Server {
 	fn sync_windows(&mut self) -> Result<()> {
 		println!("sync windows");
 		let mut ws = HashMap::new();
-		for wi in WinInfo::windows()? {
+		let mut wins = WinInfo::windows()?;
+		self.names.clear();
+		wins.sort_by(|a, b| a.name.cmp(&b.name));
+		for wi in wins {
 			if !wi.name.ends_with(".go") {
 				continue;
 			}
-			println!("found {}", wi.name);
+			self.names.push((wi.name.clone(), wi.id));
 			let w = match self.ws.remove(&wi.id) {
 				Some(w) => w,
 				None => {
@@ -144,10 +176,25 @@ impl Server {
 					panic!("unexpected");
 				}
 			},
-			'L' => match ev.text.as_str() {
-				"define" => {}
-				_ => {}
-			},
+			'L' => {
+				let mut wid: usize = 0;
+				for (pos, id) in self.addr.iter().rev() {
+					if (*pos as u32) < ev.q0 {
+						wid = *id;
+						break;
+					}
+				}
+				if wid == 0 {
+					// TODO: this may be a file address, plumb it
+					return Ok(());
+				}
+				let sw = self.ws.get_mut(&wid).unwrap();
+				let addr = sw.pos()?;
+				let pos = format!("{}:#{}", sw.name, addr.0);
+				let res = Command::new("guru").arg(ev.text).arg(&pos).output()?;
+				let out = std::str::from_utf8(&res.stdout)?.trim();
+				self.output.push(out.to_string());
+			}
 			_ => {}
 		}
 		Ok(())
@@ -177,6 +224,7 @@ impl Server {
 				},
 			}
 		}
+		println!("wait returning");
 		Ok(())
 	}
 }
