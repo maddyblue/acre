@@ -6,7 +6,7 @@ use nine::p2000::OpenMode;
 use plan9::acme::*;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::thread::spawn;
+use std::thread;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
@@ -46,48 +46,54 @@ impl Server {
 			err_r,
 		};
 		let err_s1 = err_s.clone();
-		spawn(move || {
-			let mut log = LogReader::new().unwrap();
-			loop {
-				match log.read() {
-					Ok(ev) => match ev.op.as_str() {
-						"new" | "del" => {
-							println!("sending log event: {:?}", ev);
-							log_s.send(ev).unwrap();
+		thread::Builder::new()
+			.name("LogReader".to_string())
+			.spawn(move || {
+				let mut log = LogReader::new().unwrap();
+				loop {
+					match log.read() {
+						Ok(ev) => match ev.op.as_str() {
+							"new" | "del" => {
+								println!("sending log event: {:?}", ev);
+								log_s.send(ev).unwrap();
+							}
+							_ => {
+								println!("log event: {:?}", ev);
+							}
+						},
+						Err(err) => {
+							err_s1.send(err).unwrap();
+							return;
+						}
+					};
+				}
+			})
+			.unwrap();
+		thread::Builder::new()
+			.name("WindowEvents".to_string())
+			.spawn(move || loop {
+				let mut ev = wev.read_event().unwrap();
+				println!("window event: {:?}", ev);
+				match ev.c2 {
+					'x' | 'X' => match ev.text.as_str() {
+						"Del" => {
+							return;
+						}
+						"Get" => {
+							ev_s.send(ev).unwrap();
 						}
 						_ => {
-							println!("log event: {:?}", ev);
+							wev.write_event(ev).unwrap();
 						}
 					},
-					Err(err) => {
-						err_s1.send(err).unwrap();
-						return;
-					}
-				};
-			}
-		});
-		spawn(move || loop {
-			let mut ev = wev.read_event().unwrap();
-			println!("window event: {:?}", ev);
-			match ev.c2 {
-				'x' | 'X' => match ev.text.as_str() {
-					"Del" => {
-						return;
-					}
-					"Get" => {
+					'L' => {
+						ev.load_text();
 						ev_s.send(ev).unwrap();
 					}
-					_ => {
-						wev.write_event(ev).unwrap();
-					}
-				},
-				'L' => {
-					ev.load_text();
-					ev_s.send(ev).unwrap();
+					_ => {}
 				}
-				_ => {}
-			}
-		});
+			})
+			.unwrap();
 		Ok(s)
 	}
 	fn sync(&mut self) -> Result<()> {
