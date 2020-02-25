@@ -35,7 +35,6 @@ struct Server {
 
 struct ServerWin {
 	name: String,
-	id: usize,
 	w: Win,
 }
 
@@ -155,11 +154,7 @@ impl Server {
 					let mut fsys = FSYS.lock().unwrap();
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
-					ServerWin {
-						name: wi.name,
-						id: wi.id,
-						w,
-					}
+					ServerWin { name: wi.name, w }
 				}
 			};
 			ws.insert(wi.id, w);
