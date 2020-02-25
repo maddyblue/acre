@@ -4,6 +4,7 @@ extern crate crossbeam_channel;
 use crossbeam_channel::{bounded, Receiver};
 use nine::p2000::OpenMode;
 use plan9::acme::*;
+use plan9::plumb;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::process::Command;
@@ -185,8 +186,13 @@ impl Server {
 					}
 				}
 				if wid == 0 {
-					// TODO: this may be a file address, plumb it
-					return Ok(());
+					let f = plumb::open("send", OpenMode::WRITE)?;
+					let msg = plumb::Message {
+						dst: "edit".to_string(),
+						typ: "text".to_string(),
+						data: ev.text.into(),
+					};
+					return msg.send(f);
 				}
 				let sw = self.ws.get_mut(&wid).unwrap();
 				let addr = sw.pos()?;

@@ -3,6 +3,7 @@ pub mod conn;
 pub mod dial;
 pub mod fid;
 pub mod fsys;
+pub mod plumb;
 
 use std::error::Error;
 use std::fmt;
