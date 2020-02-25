@@ -27,6 +27,7 @@ struct Server {
 	addr: Vec<(usize, usize)>,
 
 	output: Vec<String>,
+	focus: String,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -60,6 +61,7 @@ impl Server {
 			names: vec![],
 			addr: vec![],
 			output: vec![],
+			focus: "".to_string(),
 			log_r,
 			ev_r,
 			err_r,
@@ -72,7 +74,7 @@ impl Server {
 				loop {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
-							"new" | "del" => {
+							"new" | "del" | "focus" => {
 								println!("sending log event: {:?}", ev);
 								log_s.send(ev).unwrap();
 							}
@@ -122,7 +124,8 @@ impl Server {
 			self.addr.push((body.len(), *id));
 			write!(
 				&mut body,
-				"{}\n\t[definition] [describe] [referrers]\n",
+				"{}{}\n\t[definition] [describe] [referrers]\n",
+				if *name == self.focus { "*" } else { "" },
 				name
 			)?;
 		}
@@ -213,7 +216,14 @@ impl Server {
 			select! {
 				recv(self.log_r) -> msg => {
 					match msg {
-						Ok(_) => { self.sync_windows()?;},
+						Ok(ev) => {
+							 match ev.op.as_str() {
+								"focus" => {
+									self.focus = ev.name;
+								},
+								_ => {self.sync_windows()?;},
+							}
+						},
 						Err(_) => { println!("log_r closed"); break;},
 					};
 				},
