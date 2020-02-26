@@ -318,7 +318,8 @@ mod tests {
 	#[test]
 	#[ignore]
 	fn new() {
-		let (mut w, mut wev) = Win::new().unwrap();
+		let mut w = Win::new().unwrap();
+		let mut wev = w.events().unwrap();
 		w.name("testing").unwrap();
 		w.write(File::Body, "blah hello done hello").unwrap();
 		loop {
