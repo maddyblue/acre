@@ -32,6 +32,7 @@ struct Server {
 	// Vec of (position, win id) to map Look locations to windows.
 	addr: Vec<(usize, usize)>,
 
+	body: String,
 	output: Vec<String>,
 	focus: String,
 	progress: HashMap<String, String>,
@@ -72,6 +73,7 @@ impl Server {
 			names: vec![],
 			addr: vec![],
 			output: vec![],
+			body: "".to_string(),
 			focus: "".to_string(),
 			progress: HashMap::new(),
 			log_r,
@@ -155,10 +157,13 @@ impl Server {
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
 		}
-		self.w.clear()?;
-		self.w.write(File::Body, &body)?;
-		self.w.ctl("cleartag\nclean")?;
-		self.w.write(File::Tag, " Get")?;
+		if self.body != body {
+			self.body = body.clone();
+			self.w.write(File::Addr, &format!(","))?;
+			self.w.write(File::Data, &body)?;
+			self.w.ctl("cleartag\nclean")?;
+			self.w.write(File::Tag, " Get")?;
+		}
 		Ok(())
 	}
 	fn sync_windows(&mut self) -> Result<()> {
