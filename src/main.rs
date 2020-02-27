@@ -242,7 +242,7 @@ impl Server {
 						v.push(format!(
 							"{}:{}: [{:?}] {}",
 							path,
-							p.range.start.line,
+							p.range.start.line + 1,
 							p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
 							msg,
 						));
