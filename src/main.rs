@@ -44,7 +44,9 @@ struct Server {
 	guru_r: Receiver<String>,
 	guru_s: Sender<String>,
 	err_r: Receiver<Error>,
-	clients: Vec<lsp::Client>,
+
+	// name -> client
+	clients: HashMap<String, lsp::Client>,
 }
 
 struct ServerWin {
@@ -69,6 +71,11 @@ impl Server {
 		let mut w = Win::new()?;
 		w.name("acre")?;
 		let mut wev = w.events()?;
+		let mut cls = HashMap::new();
+		for c in clients {
+			let name = c.name.clone();
+			cls.insert(name, c);
+		}
 		let s = Server {
 			w,
 			ws: HashMap::new(),
@@ -84,7 +91,7 @@ impl Server {
 			guru_r,
 			guru_s,
 			err_r,
-			clients,
+			clients: cls,
 		};
 		let err_s1 = err_s.clone();
 		thread::Builder::new()
@@ -201,8 +208,8 @@ impl Server {
 		self.ws = ws;
 		Ok(())
 	}
-	fn lsp_msg(&mut self, client_index: usize, msg: lsp::DeMessage) -> Result<()> {
-		let client = &self.clients[client_index];
+	fn lsp_msg(&mut self, client: String, msg: lsp::DeMessage) -> Result<()> {
+		let client = &self.clients.get(&client).unwrap();
 		if let Some(method) = msg.method {
 			match method {
 				"window/progress" => {
@@ -305,19 +312,29 @@ impl Server {
 	fn wait(&mut self) -> Result<()> {
 		self.sync_windows()?;
 		// chan index -> (recv chan, self.clients index)
-		let mut clients: HashMap<usize, (Receiver<Vec<u8>>, usize)> = HashMap::new();
+
+		// one-time index setup
+		let mut sel = Select::new();
+		let sel_log_r = sel.recv(&self.log_r);
+		let sel_ev_r = sel.recv(&self.ev_r);
+		let sel_guru_r = sel.recv(&self.guru_r);
+		let sel_err_r = sel.recv(&self.err_r);
+		let mut clients: HashMap<usize, (Receiver<Vec<u8>>, String)> = HashMap::new();
+		for (name, c) in &self.clients {
+			clients.insert(sel.recv(&c.msg_r), (c.msg_r.clone(), name.to_string()));
+		}
+		drop(sel);
+
 		loop {
 			self.sync()?;
+
 			let mut sel = Select::new();
-			let sel_log_r = sel.recv(&self.log_r);
-			let sel_ev_r = sel.recv(&self.ev_r);
-			let sel_guru_r = sel.recv(&self.guru_r);
-			let sel_err_r = sel.recv(&self.err_r);
-			clients.clear();
-			// TODO: this is probably needlessly duplicative due to
-			// cloning the recv chans each event.
-			for (i, c) in self.clients.iter().enumerate() {
-				clients.insert(sel.recv(&c.msg_r), (c.msg_r.clone(), i));
+			sel.recv(&self.log_r);
+			sel.recv(&self.ev_r);
+			sel.recv(&self.guru_r);
+			sel.recv(&self.err_r);
+			for (_, c) in &self.clients {
+				sel.recv(&c.msg_r);
 			}
 			let index = sel.ready();
 
@@ -368,10 +385,11 @@ impl Server {
 					}
 				},
 				_ => {
-					let (ch, i) = clients.get(&index).unwrap();
+					let (ch, name) = clients.get(&index).unwrap();
 					let msg = ch.recv()?;
 					let d: lsp::DeMessage = serde_json::from_slice(&msg)?;
-					self.lsp_msg(*i, d)?;
+					println!("msg: {}", std::str::from_utf8(&msg).unwrap());
+					self.lsp_msg(name.to_string(), d)?;
 				}
 			};
 		}
