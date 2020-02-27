@@ -42,14 +42,8 @@ impl Conn {
 			let mut size: u32 = Conn::read_a(&reader).unwrap();
 			let mtype: u8 = Conn::read_a(&reader).unwrap();
 			size -= 5;
-			let mut data = Vec::with_capacity(size as usize);
-			let mut t = reader.take(size as u64);
-			t.read_to_end(&mut data).unwrap();
-			if data.len() != size as usize {
-				panic!("unexpected length");
-			}
-			// Pass ownership back to the reader.
-			reader = t.into_inner();
+			let mut data = vec![0u8; size as usize];
+			reader.read_exact(&mut data).unwrap();
 			// Prepend the size back. The read_msg function needs
 			// it incase an error type is returned.
 			// TODO: is there a way to do this that doesn't involve
