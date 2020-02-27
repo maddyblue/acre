@@ -36,6 +36,8 @@ struct Server {
 	output: Vec<String>,
 	focus: String,
 	progress: HashMap<String, String>,
+	// file name -> list of diagnostics
+	diags: HashMap<String, Vec<String>>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -76,6 +78,7 @@ impl Server {
 			body: "".to_string(),
 			focus: "".to_string(),
 			progress: HashMap::new(),
+			diags: HashMap::new(),
 			log_r,
 			ev_r,
 			guru_r,
@@ -141,6 +144,14 @@ impl Server {
 		}
 		if self.progress.len() > 0 {
 			body.push('\n');
+		}
+		for (_, ds) in &self.diags {
+			for d in ds {
+				write!(&mut body, "{}\n", d)?;
+			}
+			if ds.len() > 0 {
+				body.push('\n');
+			}
 		}
 		self.addr.clear();
 		for (name, id) in &self.names {
@@ -214,10 +225,29 @@ impl Server {
 						self.progress.insert(name, s);
 					}
 				}
+				"textDocument/publishDiagnostics" => {
+					let dp: lsp_types::PublishDiagnosticsParams =
+						serde_json::from_str(msg.params.unwrap().get())?;
+					let mut v = vec![];
+					let path = dp.uri.path();
+					for p in dp.diagnostics {
+						let msg = p.message.lines().next().unwrap_or("");
+						v.push(format!(
+							"{}:{}: [{:?}] {}",
+							path,
+							p.range.start.line,
+							p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
+							msg,
+						));
+					}
+					self.diags.insert(path.to_string(), v);
+				}
 				_ => {
-					println!("unrecognized method: {}", method);
+					println!("unrecognized method: {:?}", msg);
 				}
 			}
+		} else {
+			println!("unhandled lsp msg: {:?}", msg);
 		}
 		Ok(())
 	}
