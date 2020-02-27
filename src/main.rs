@@ -1,10 +1,7 @@
-#[macro_use]
-extern crate crossbeam_channel;
-
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Select, Sender};
 use nine::p2000::OpenMode;
-use plan9::acme::*;
-use plan9::plumb;
+use plan9::{acme::*, lsp, plumb};
+use serde_json;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::process::Command;
@@ -14,7 +11,16 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
 
 fn main() -> Result<()> {
-	let mut s = Server::new()?;
+	let rust_client = lsp::Client::new(
+		"rls".to_string(),
+		".rs".to_string(),
+		"rls",
+		std::iter::empty(),
+		"file:///home/mjibson/go/src/github.com/mjibson/plan9",
+		None,
+	)
+	.unwrap();
+	let mut s = Server::new(vec![rust_client])?;
 	s.wait()
 }
 
@@ -28,12 +34,14 @@ struct Server {
 
 	output: Vec<String>,
 	focus: String,
+	progress: HashMap<String, String>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
 	guru_r: Receiver<String>,
 	guru_s: Sender<String>,
 	err_r: Receiver<Error>,
+	clients: Vec<lsp::Client>,
 }
 
 struct ServerWin {
@@ -50,7 +58,7 @@ impl ServerWin {
 }
 
 impl Server {
-	fn new() -> Result<Server> {
+	fn new(clients: Vec<lsp::Client>) -> Result<Server> {
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
@@ -65,11 +73,13 @@ impl Server {
 			addr: vec![],
 			output: vec![],
 			focus: "".to_string(),
+			progress: HashMap::new(),
 			log_r,
 			ev_r,
 			guru_r,
 			guru_s,
 			err_r,
+			clients,
 		};
 		let err_s1 = err_s.clone();
 		thread::Builder::new()
@@ -80,11 +90,11 @@ impl Server {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
 							"new" | "del" | "focus" => {
-								println!("sending log event: {:?}", ev);
+								//println!("sending log event: {:?}", ev);
 								log_s.send(ev).unwrap();
 							}
 							_ => {
-								println!("log event: {:?}", ev);
+								//println!("log event: {:?}", ev);
 							}
 						},
 						Err(err) => {
@@ -99,7 +109,7 @@ impl Server {
 			.name("WindowEvents".to_string())
 			.spawn(move || loop {
 				let mut ev = wev.read_event().unwrap();
-				println!("window event: {:?}", ev);
+				//println!("window event: {:?}", ev);
 				match ev.c2 {
 					'x' | 'X' => match ev.text.as_str() {
 						"Del" => {
@@ -124,6 +134,12 @@ impl Server {
 	}
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
+		for (_, p) in &self.progress {
+			write!(&mut body, "{}\n", p)?;
+		}
+		if self.progress.len() > 0 {
+			body.push('\n');
+		}
 		self.addr.clear();
 		for (name, id) in &self.names {
 			self.addr.push((body.len(), *id));
@@ -146,7 +162,6 @@ impl Server {
 		Ok(())
 	}
 	fn sync_windows(&mut self) -> Result<()> {
-		println!("sync windows");
 		let mut ws = HashMap::new();
 		let mut wins = WinInfo::windows()?;
 		self.names.clear();
@@ -168,6 +183,37 @@ impl Server {
 			ws.insert(wi.id, w);
 		}
 		self.ws = ws;
+		Ok(())
+	}
+	fn lsp_msg(&mut self, client_index: usize, msg: lsp::DeMessage) -> Result<()> {
+		let client = &self.clients[client_index];
+		if let Some(method) = msg.method {
+			match method {
+				"window/progress" => {
+					let d: WindowProgress = serde_json::from_str(msg.params.unwrap().get())?;
+					let name = format!("{}-{}", client.name, d.id);
+					if d.done.unwrap_or(false) {
+						self.progress.remove(&name);
+					} else {
+						let pct: String = match d.percentage {
+							Some(v) => v.to_string(),
+							None => "?".to_string(),
+						};
+						let s = format!(
+							"[{}%] {}: {} ({})",
+							pct,
+							&name,
+							d.message.unwrap_or(""),
+							d.title.unwrap_or(""),
+						);
+						self.progress.insert(name, s);
+					}
+				}
+				_ => {
+					println!("unrecognized method: {}", method);
+				}
+			}
+		}
 		Ok(())
 	}
 	fn run_cmd(&mut self, ev: Event) -> Result<()> {
@@ -223,46 +269,76 @@ impl Server {
 	}
 	fn wait(&mut self) -> Result<()> {
 		self.sync_windows()?;
+		// chan index -> (recv chan, self.clients index)
+		let mut clients: HashMap<usize, (Receiver<Vec<u8>>, usize)> = HashMap::new();
 		loop {
 			self.sync()?;
-			select! {
-				recv(self.log_r) -> msg => {
-					match msg {
-						Ok(ev) => {
-							 match ev.op.as_str() {
-								"focus" => {
-									self.focus = ev.name;
-								},
-								_ => {self.sync_windows()?;},
-							}
-						},
-						Err(_) => { println!("log_r closed"); break;},
-					};
-				},
-				recv(self.ev_r) -> msg => {
-					match msg {
-						Ok(ev) => { self.run_cmd(ev)?; },
-						Err(_) => { println!("ev_r closed"); break;},
-					};
-				},
-				recv(self.guru_r) -> msg => {
-					match msg {
-						Ok(s) => {
-							self.output.insert(0, s);
-							if self.output.len() > 5 {
-								self.output.drain(5..);
-							}
-						},
-						Err(_) => {println!("guru_r closed"); break;},
-					};
-				},
-				recv(self.err_r) -> msg => {
-					match msg {
-						Ok(v) => { println!("err: {}", v); break;},
-						Err(_) => { println!("err_r closed"); break;},
-					};
-				},
+			let mut sel = Select::new();
+			let sel_log_r = sel.recv(&self.log_r);
+			let sel_ev_r = sel.recv(&self.ev_r);
+			let sel_guru_r = sel.recv(&self.guru_r);
+			let sel_err_r = sel.recv(&self.err_r);
+			clients.clear();
+			// TODO: this is probably needlessly duplicative due to
+			// cloning the recv chans each event.
+			for (i, c) in self.clients.iter().enumerate() {
+				clients.insert(sel.recv(&c.msg_r), (c.msg_r.clone(), i));
 			}
+			let index = sel.ready();
+
+			match index {
+				_ if index == sel_log_r => match self.log_r.recv() {
+					Ok(ev) => match ev.op.as_str() {
+						"focus" => {
+							self.focus = ev.name;
+						}
+						_ => {
+							self.sync_windows()?;
+						}
+					},
+					Err(_) => {
+						println!("log_r closed");
+						break;
+					}
+				},
+				_ if index == sel_ev_r => match self.ev_r.recv() {
+					Ok(ev) => {
+						self.run_cmd(ev)?;
+					}
+					Err(_) => {
+						println!("ev_r closed");
+						break;
+					}
+				},
+				_ if index == sel_guru_r => match self.guru_r.recv() {
+					Ok(s) => {
+						self.output.insert(0, s);
+						if self.output.len() > 5 {
+							self.output.drain(5..);
+						}
+					}
+					Err(_) => {
+						println!("guru_r closed");
+						break;
+					}
+				},
+				_ if index == sel_err_r => match self.err_r.recv() {
+					Ok(v) => {
+						println!("err: {}", v);
+						break;
+					}
+					Err(_) => {
+						println!("err_r closed");
+						break;
+					}
+				},
+				_ => {
+					let (ch, i) = clients.get(&index).unwrap();
+					let msg = ch.recv()?;
+					let d: lsp::DeMessage = serde_json::from_slice(&msg)?;
+					self.lsp_msg(*i, d)?;
+				}
+			};
 		}
 		println!("wait returning");
 		Ok(())
@@ -273,4 +349,13 @@ impl Drop for Server {
 	fn drop(&mut self) {
 		let _ = self.w.del(true);
 	}
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WindowProgress<'a> {
+	done: Option<bool>,
+	id: &'a str,
+	message: Option<&'a str>,
+	title: Option<&'a str>,
+	percentage: Option<f64>,
 }

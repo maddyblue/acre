@@ -1,24 +1,26 @@
 use crate::Result;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver};
 use lsp_types::{request::*, *};
 use serde::ser::Serialize;
 use serde_json;
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct Client {
+	pub name: String,
 	proc: Child,
+	files: String,
 	stdin: ChildStdin,
-	id_map: Arc<Mutex<HashMap<usize, Sender<Vec<u8>>>>>,
 	next_id: usize,
+	pub msg_r: Receiver<Vec<u8>>,
 }
 
 impl Client {
 	#![allow(deprecated)]
 	pub fn new<I, S>(
+		name: String,
+		files: String,
 		program: S,
 		args: I,
 		root_uri: &str,
@@ -35,13 +37,15 @@ impl Client {
 			.spawn()?;
 		let mut stdout = BufReader::new(proc.stdout.take().unwrap());
 		let stdin = proc.stdin.take().unwrap();
+		let (msg_s, msg_r) = unbounded();
 		let mut c = Client {
+			name,
+			files,
 			proc,
 			stdin,
-			id_map: Arc::new(Mutex::new(HashMap::new())),
 			next_id: 1,
+			msg_r,
 		};
-		let im = Arc::clone(&c.id_map);
 		thread::spawn(move || loop {
 			let mut line = String::new();
 			let mut content_len: usize = 0;
@@ -69,15 +73,8 @@ impl Client {
 			}
 			let mut v = vec![0u8; content_len];
 			stdout.read_exact(&mut v).unwrap();
-			println!("\n{}", std::str::from_utf8(&v).unwrap());
-			/*
-			let s = im
-				.lock()
-				.unwrap()
-				.remove(&id)
-				.expect(&format!("expected receiver with id {}", id));
-			s.send(vec![]).unwrap();
-			*/
+			//println!("got: {}", std::str::from_utf8(&v).unwrap());
+			msg_s.send(v).unwrap();
 		});
 		// TODO: remove the unwrap here. Unsure how to bubble up errors
 		// from a closure.
@@ -106,7 +103,7 @@ impl Client {
 		Ok(c)
 	}
 	pub fn send<R: Request, S: Serialize>(&mut self, params: S) -> Result<()> {
-		let (id, r) = self.new_id()?;
+		let id = self.new_id()?;
 		let msg = Message {
 			jsonrpc: "2.0",
 			id,
@@ -115,7 +112,6 @@ impl Client {
 		};
 		let s = serde_json::to_string(&msg)?;
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
-		println!("send: {}", s);
 		write!(self.stdin, "{}", s)?;
 		Ok(())
 	}
@@ -123,12 +119,16 @@ impl Client {
 		self.proc.wait()?;
 		Ok(())
 	}
-	fn new_id(&mut self) -> Result<(usize, Receiver<Vec<u8>>)> {
+	fn new_id(&mut self) -> Result<usize> {
 		let id = self.next_id;
 		self.next_id += 1;
-		let (s, r) = bounded(0);
-		self.id_map.lock().unwrap().insert(id, s);
-		Ok((id, r))
+		Ok(id)
+	}
+}
+
+impl Drop for Client {
+	fn drop(&mut self) {
+		let _ = self.proc.kill();
 	}
 }
 
@@ -140,6 +140,24 @@ struct Message<P> {
 	params: P,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct DeMessage<'a> {
+	pub id: Option<usize>,
+	pub method: Option<&'a str>,
+	#[serde(borrow)]
+	pub params: Option<&'a serde_json::value::RawValue>,
+	#[serde(borrow)]
+	pub result: Option<&'a serde_json::value::RawValue>,
+	pub error: Option<ResponseError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ResponseError {
+	pub code: usize,
+	pub message: String,
+	pub data: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
 	use crate::lsp::*;
@@ -147,6 +165,7 @@ mod tests {
 	#[test]
 	fn lsp() {
 		let mut l = Client::new(
+			".rs".to_string(),
 			"rls",
 			std::iter::empty(),
 			"file:///home/mjibson/go/src/github.com/mjibson/plan9",
