@@ -271,6 +271,9 @@ impl Server {
 					let mut fsys = FSYS.lock().unwrap();
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
+					// Explicitly drop fsys here to remove its lock to prevent deadlocking if we
+					// call w.events().
+					drop(fsys);
 					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
 					let (version, text) = sw.text()?;
 					client.notify::<DidOpenTextDocument, DidOpenTextDocumentParams>(
