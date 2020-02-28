@@ -417,7 +417,8 @@ impl Server {
 					_ => panic!("unknown completion response: {:?}", msg),
 				}
 				if o.len() > 0 {
-					self.output.insert(0, o.join("\n"));
+					let n = std::cmp::min(o.len(), 20);
+					self.output.insert(0, o[0..n].join("\n"));
 				}
 			}
 		} else {
