@@ -431,6 +431,7 @@ impl Server {
 		match ev.c2 {
 			'x' | 'X' => match ev.text.as_str() {
 				"Get" => {
+					self.output.clear();
 					self.sync_windows()?;
 				}
 				_ => {
