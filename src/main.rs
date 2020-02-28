@@ -5,7 +5,6 @@ use plan9::{acme::*, lsp, plumb};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::io::{BufRead, BufReader, Read};
 use std::thread;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
