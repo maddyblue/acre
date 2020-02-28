@@ -97,6 +97,9 @@ impl Client {
 						)
 						.unwrap(),
 					),
+					HoverRequest::METHOD => Box::new(
+						serde_json::from_str::<Option<Hover>>(msg.result.unwrap().get()).unwrap(),
+					),
 					_ => panic!("unrecognized type: {}", typ),
 				}
 			} else if let Some(method) = msg.method {

@@ -240,6 +240,9 @@ impl Server {
 			if caps.definition_provider.unwrap_or(false) {
 				body.push_str("[definition] ");
 			}
+			if caps.hover_provider.unwrap_or(false) {
+				body.push_str("[hover] ");
+			}
 			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
@@ -373,6 +376,22 @@ impl Server {
 					_ => panic!("unknown definition response: {:?}", msg),
 				};
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<Hover>>() {
+			if let Some(msg) = msg {
+				match &msg.contents {
+					HoverContents::Array(mss) => {
+						let mut o: Vec<String> = vec![];
+						for ms in mss {
+							match ms {
+								MarkedString::String(s) => o.push(s.clone()),
+								MarkedString::LanguageString(s) => o.push(s.value.clone()),
+							};
+						}
+						self.output.insert(0, o.join("\n"));
+					}
+					_ => panic!("unknown hover response: {:?}", msg),
+				};
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -411,6 +430,11 @@ impl Server {
 				match ev.text.as_str() {
 					"definition" => {
 						client.send::<GotoDefinition, TextDocumentPositionParams>(
+							TextDocumentPositionParams::new(sw.doc.clone(), pos),
+						)?;
+					}
+					"hover" => {
+						client.send::<HoverRequest, TextDocumentPositionParams>(
 							TextDocumentPositionParams::new(sw.doc.clone(), pos),
 						)?;
 					}
