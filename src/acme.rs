@@ -302,9 +302,68 @@ impl Event {
 	}
 }
 
+#[derive(Debug)]
+pub struct NlOffsets {
+	nl: Vec<u64>,
+	leftover: u64,
+}
+
+impl NlOffsets {
+	pub fn new<R: Read>(r: R) -> Result<NlOffsets> {
+		let mut r = BufReader::new(r);
+		let mut nl = vec![0];
+		let mut o = 0;
+		let mut line = vec![];
+		let mut leftover = 0;
+		loop {
+			line.clear();
+			let sz = r.read_until('\n' as u8, &mut line)?;
+			if sz == 0 {
+				break;
+			}
+			let n = std::str::from_utf8(&line)?.chars().count() as u64;
+			let last: u8 = *line.last().unwrap();
+			if last != '\n' as u8 {
+				leftover = n;
+				break;
+			}
+			o += n;
+			nl.push(o);
+		}
+		Ok(NlOffsets { nl, leftover })
+	}
+	// returns line, col
+	pub fn offset_to_line(&self, offset: u64) -> (u64, u64) {
+		for (i, o) in self.nl.iter().enumerate() {
+			if *o > offset {
+				return (i as u64 - 1, offset - self.nl[i - 1]);
+			}
+		}
+		let i = self.nl.len() - 1;
+		if offset >= self.nl[i] {
+			return (i as u64, offset - self.nl[i]);
+		}
+		panic!("unreachable");
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use crate::acme::*;
+
+	#[test]
+	fn nloffsets() {
+		let s = "12345\n678\n90";
+		let c = std::io::Cursor::new(s);
+		let n = NlOffsets::new(c).unwrap();
+		assert_eq!(n.offset_to_line(0), (0, 0));
+		assert_eq!(n.offset_to_line(3), (0, 3));
+		assert_eq!(n.offset_to_line(5), (0, 5));
+		assert_eq!(n.offset_to_line(6), (1, 0));
+		assert_eq!(n.offset_to_line(7), (1, 1));
+		assert_eq!(n.offset_to_line(9), (1, 3));
+		assert_eq!(n.offset_to_line(10), (2, 0));
+	}
 
 	#[test]
 	fn windows() {

@@ -434,51 +434,6 @@ impl Drop for Server {
 	}
 }
 
-#[derive(Debug)]
-struct NlOffsets {
-	nl: Vec<u64>,
-	leftover: u64,
-}
-
-impl NlOffsets {
-	fn new<R: Read>(r: R) -> Result<NlOffsets> {
-		let mut r = BufReader::new(r);
-		let mut nl = vec![];
-		let mut o = 0;
-		let mut line = vec![];
-		let mut leftover = 0;
-		loop {
-			line.clear();
-			let sz = r.read_until('\n' as u8, &mut line)?;
-			if sz == 0 {
-				break;
-			}
-			let n = std::str::from_utf8(&line)?.chars().count() as u64;
-			let last: u8 = *line.last().unwrap();
-			if last != '\n' as u8 {
-				leftover = n;
-				break;
-			}
-			o += n;
-			nl.push(o);
-		}
-		Ok(NlOffsets { nl, leftover })
-	}
-	// returns line, col
-	fn offset_to_line(self, offset: u64) -> (u64, u64) {
-		for (i, o) in self.nl.iter().enumerate() {
-			if *o > offset {
-				return (i as u64 - 1, offset - self.nl[i - 1]);
-			}
-		}
-		let i = self.nl.len() - 1;
-		if offset >= self.nl[i] {
-			return (i as u64, offset - self.nl[i]);
-		}
-		panic!("unreachable");
-	}
-}
-
 fn location_to_plumb(l: &Location) -> String {
 	format!("{}:{}", l.uri.path(), l.range.start.line + 1,)
 }
