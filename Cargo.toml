@@ -1,5 +1,5 @@
 [package]
-name = "plan9"
+name = "acre"
 version = "0.1.0"
 authors = ["Matt Jibson <matt.jibson@gmail.com>"]
 edition = "2018"

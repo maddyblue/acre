@@ -1,7 +1,7 @@
+use acre::{acme::*, lsp, plumb};
 use crossbeam_channel::{bounded, Receiver, Select};
 use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
-use plan9::{acme::*, lsp, plumb};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -17,7 +17,7 @@ fn main() -> Result<()> {
 		".rs".to_string(),
 		"rls",
 		std::iter::empty(),
-		Some("file:///home/mjibson/go/src/github.com/mjibson/plan9"),
+		Some("file:///home/mjibson/go/src/github.com/mjibson/acre"),
 		None,
 	)
 	.unwrap();
