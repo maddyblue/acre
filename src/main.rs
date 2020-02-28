@@ -1,10 +1,11 @@
 use crossbeam_channel::{bounded, Receiver, Select};
-use lsp_types::{request::*, *};
+use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
 use plan9::{acme::*, lsp, plumb};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::io::Read;
 use std::thread;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -20,7 +21,8 @@ fn main() -> Result<()> {
 		None,
 	)
 	.unwrap();
-	let go_client = lsp::Client::new(
+	/*
+	let _go_client = lsp::Client::new(
 		"gopls".to_string(),
 		".go".to_string(),
 		"gopls",
@@ -29,7 +31,8 @@ fn main() -> Result<()> {
 		Some(vec!["file:///home/mjibson/go/src/github.com/mjibson/esc"]),
 	)
 	.unwrap();
-	let mut s = Server::new(vec![rust_client, go_client])?;
+	*/
+	let mut s = Server::new(vec![rust_client])?;
 	s.wait()
 }
 
@@ -64,9 +67,32 @@ struct ServerWin {
 	name: String,
 	w: Win,
 	doc: TextDocumentIdentifier,
+	url: Url,
+	lang_id: String,
+	version: i64,
+	client: String,
 }
 
 impl ServerWin {
+	fn new(name: String, w: Win, client: String) -> Result<ServerWin> {
+		let url = Url::parse(&format!("file://{}", name))?;
+		let doc = TextDocumentIdentifier::new(url.clone());
+		let lang_id = match name.rsplit(".").next().unwrap_or("") {
+			"go" => "go",
+			"rs" => "rust",
+			_ => panic!("unknown file extension {}", name),
+		}
+		.to_string();
+		Ok(ServerWin {
+			name,
+			w,
+			doc,
+			url,
+			lang_id,
+			version: 1,
+			client,
+		})
+	}
 	fn pos(&mut self) -> Result<(usize, usize)> {
 		self.w.ctl("addr=dot")?;
 		// TODO: convert these character (rune) offsets to byte offsets.
@@ -77,6 +103,11 @@ impl ServerWin {
 		let nl = NlOffsets::new(self.w.read(File::Body)?)?;
 		let (line, col) = nl.offset_to_line(pos.0 as u64);
 		Ok(Position::new(line, col))
+	}
+	fn text(&mut self) -> Result<String> {
+		let mut buf = String::new();
+		self.w.read(File::Body)?.read_to_string(&mut buf)?;
+		Ok(buf)
 	}
 }
 
@@ -220,17 +251,18 @@ impl Server {
 		wins.sort_by(|a, b| a.name.cmp(&b.name));
 		self.files.clear();
 		for wi in wins {
-			let mut ok = false;
-			for (_, c) in &self.clients {
+			let mut client = None;
+			for (_, c) in self.clients.iter_mut() {
 				if wi.name.ends_with(&c.files) {
-					ok = true;
 					self.files.insert(wi.name.clone(), c.name.clone());
+					client = Some(c);
 					break;
 				}
 			}
-			if !ok {
-				continue;
-			}
+			let client = match client {
+				Some(c) => c,
+				None => continue,
+			};
 			self.names.push((wi.name.clone(), wi.id));
 			let w = match self.ws.remove(&wi.id) {
 				Some(w) => w,
@@ -238,16 +270,31 @@ impl Server {
 					let mut fsys = FSYS.lock().unwrap();
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
-					let doc =
-						TextDocumentIdentifier::new(Url::parse(&format!("file://{}", &wi.name))?);
-					ServerWin {
-						name: wi.name,
-						w,
-						doc,
-					}
+					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
+					client.notify::<DidOpenTextDocument, DidOpenTextDocumentParams>(
+						DidOpenTextDocumentParams {
+							text_document: TextDocumentItem::new(
+								sw.url.clone(),
+								sw.lang_id.clone(),
+								sw.version,
+								sw.text()?,
+							),
+						},
+					)?;
+
+					sw
 				}
 			};
 			ws.insert(wi.id, w);
+		}
+		// close remaining files
+		for (_, w) in &self.ws {
+			let client = self.clients.get_mut(&w.client).unwrap();
+			client.notify::<DidCloseTextDocument, DidCloseTextDocumentParams>(
+				DidCloseTextDocumentParams {
+					text_document: w.doc.clone(),
+				},
+			)?;
 		}
 		self.ws = ws;
 		Ok(())

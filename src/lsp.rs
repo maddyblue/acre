@@ -1,6 +1,6 @@
 use crate::Result;
 use crossbeam_channel::{unbounded, Receiver};
-use lsp_types::{request::*, *};
+use lsp_types::{notification, request::*, *};
 use serde::ser::Serialize;
 use serde_json;
 use std::any::Any;
@@ -158,6 +158,19 @@ impl Client {
 			params,
 		};
 		let s = serde_json::to_string(&msg)?;
+		println!("send request: {}", s);
+		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
+		write!(self.stdin, "{}", s)?;
+		Ok(())
+	}
+	pub fn notify<N: notification::Notification, S: Serialize>(&mut self, params: S) -> Result<()> {
+		let msg = Notification {
+			jsonrpc: "2.0",
+			method: N::METHOD,
+			params,
+		};
+		let s = serde_json::to_string(&msg)?;
+		println!("send notification: {}", msg.method);
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
 		Ok(())
@@ -187,6 +200,13 @@ impl Drop for Client {
 struct Message<P> {
 	jsonrpc: &'static str,
 	id: usize,
+	method: &'static str,
+	params: P,
+}
+
+#[derive(serde::Serialize)]
+struct Notification<P> {
+	jsonrpc: &'static str,
 	method: &'static str,
 	params: P,
 }
