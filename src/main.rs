@@ -110,6 +110,20 @@ impl ServerWin {
 		self.version += 1;
 		Ok((self.version, buf))
 	}
+	fn change_params(&mut self) -> Result<DidChangeTextDocumentParams> {
+		let (version, text) = self.text()?;
+		Ok(DidChangeTextDocumentParams {
+			text_document: VersionedTextDocumentIdentifier::new(self.url.clone(), version),
+			content_changes: vec![TextDocumentContentChangeEvent {
+				range: None,
+				range_length: None,
+				text,
+			}],
+		})
+	}
+	fn did_change(&mut self, client: &mut lsp::Client) -> Result<()> {
+		client.notify::<DidChangeTextDocument, DidChangeTextDocumentParams>(self.change_params()?)
+	}
 }
 
 impl Server {
@@ -393,6 +407,7 @@ impl Server {
 					.clients
 					.get_mut(self.files.get(&sw.name).unwrap())
 					.unwrap();
+				sw.did_change(client)?;
 				match ev.text.as_str() {
 					"definition" => {
 						client.send::<GotoDefinition, TextDocumentPositionParams>(
@@ -409,17 +424,7 @@ impl Server {
 	fn cmd_put(&mut self, id: usize) -> Result<()> {
 		let sw = self.ws.get_mut(&id).unwrap();
 		let client = self.clients.get_mut(&sw.client).unwrap();
-		let (version, text) = sw.text()?;
-		client.notify::<DidChangeTextDocument, DidChangeTextDocumentParams>(
-			DidChangeTextDocumentParams {
-				text_document: VersionedTextDocumentIdentifier::new(sw.url.clone(), version),
-				content_changes: vec![TextDocumentContentChangeEvent {
-					range: None,
-					range_length: None,
-					text,
-				}],
-			},
-		)?;
+		sw.did_change(client)?;
 		client.notify::<DidSaveTextDocument, DidSaveTextDocumentParams>(
 			DidSaveTextDocumentParams {
 				text_document: sw.doc.clone(),
