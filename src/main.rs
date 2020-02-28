@@ -252,8 +252,9 @@ impl Server {
 		}
 		self.addr.push((body.len(), 0));
 		write!(&mut body, "-----\n")?;
-		if self.output.len() > 5 {
-			self.output.drain(5..);
+		const MAX_LEN: usize = 1;
+		if self.output.len() > MAX_LEN {
+			self.output.drain(MAX_LEN..);
 		}
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
