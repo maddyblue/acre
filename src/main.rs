@@ -104,10 +104,11 @@ impl ServerWin {
 		let (line, col) = nl.offset_to_line(pos.0 as u64);
 		Ok(Position::new(line, col))
 	}
-	fn text(&mut self) -> Result<String> {
+	fn text(&mut self) -> Result<(i64, String)> {
 		let mut buf = String::new();
 		self.w.read(File::Body)?.read_to_string(&mut buf)?;
-		Ok(buf)
+		self.version += 1;
+		Ok((self.version, buf))
 	}
 }
 
@@ -149,12 +150,12 @@ impl Server {
 				loop {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
-							"new" | "del" | "focus" => {
-								//println!("sending log event: {:?}", ev);
+							"new" | "del" | "focus" | "put" => {
+								println!("sending log event: {:?}", ev);
 								log_s.send(ev).unwrap();
 							}
 							_ => {
-								//println!("log event: {:?}", ev);
+								println!("log event: {:?}", ev);
 							}
 						},
 						Err(err) => {
@@ -169,7 +170,7 @@ impl Server {
 			.name("WindowEvents".to_string())
 			.spawn(move || loop {
 				let mut ev = wev.read_event().unwrap();
-				//println!("window event: {:?}", ev);
+				println!("window event: {:?}", ev);
 				match ev.c2 {
 					'x' | 'X' => match ev.text.as_str() {
 						"Del" => {
@@ -271,13 +272,14 @@ impl Server {
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
 					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
+					let (version, text) = sw.text()?;
 					client.notify::<DidOpenTextDocument, DidOpenTextDocumentParams>(
 						DidOpenTextDocumentParams {
 							text_document: TextDocumentItem::new(
 								sw.url.clone(),
 								sw.lang_id.clone(),
-								sw.version,
-								sw.text()?,
+								version,
+								text,
 							),
 						},
 					)?;
@@ -401,6 +403,27 @@ impl Server {
 		}
 		Ok(())
 	}
+	fn cmd_put(&mut self, id: usize) -> Result<()> {
+		let sw = self.ws.get_mut(&id).unwrap();
+		let client = self.clients.get_mut(&sw.client).unwrap();
+		let (version, text) = sw.text()?;
+		client.notify::<DidChangeTextDocument, DidChangeTextDocumentParams>(
+			DidChangeTextDocumentParams {
+				text_document: VersionedTextDocumentIdentifier::new(sw.url.clone(), version),
+				content_changes: vec![TextDocumentContentChangeEvent {
+					range: None,
+					range_length: None,
+					text,
+				}],
+			},
+		)?;
+		client.notify::<DidSaveTextDocument, DidSaveTextDocumentParams>(
+			DidSaveTextDocumentParams {
+				text_document: sw.doc.clone(),
+			},
+		)?;
+		Ok(())
+	}
 	fn wait(&mut self) -> Result<()> {
 		self.sync_windows()?;
 		// chan index -> (recv chan, self.clients index)
@@ -411,13 +434,18 @@ impl Server {
 		let sel_ev_r = sel.recv(&self.ev_r);
 		let sel_err_r = sel.recv(&self.err_r);
 		let mut clients = HashMap::new();
+
 		for (name, c) in &self.clients {
 			clients.insert(sel.recv(&c.msg_r), (c.msg_r.clone(), name.to_string()));
 		}
 		drop(sel);
 
+		let mut no_sync = false;
 		loop {
-			self.sync()?;
+			if !no_sync {
+				self.sync()?;
+			}
+			no_sync = false;
 
 			let mut sel = Select::new();
 			sel.recv(&self.log_r);
@@ -434,8 +462,15 @@ impl Server {
 						"focus" => {
 							self.focus = ev.name;
 						}
-						_ => {
+						"put" => {
+							self.cmd_put(ev.id)?;
+							no_sync = true;
+						}
+						"new" | "del" => {
 							self.sync_windows()?;
+						}
+						_ => {
+							panic!("unknown event op {:?}", ev);
 						}
 					},
 					Err(_) => {
