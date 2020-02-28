@@ -218,7 +218,7 @@ mod tests {
 			".rs".to_string(),
 			"rls",
 			std::iter::empty(),
-			"file:///home/mjibson/go/src/github.com/mjibson/plan9",
+			Some("file:///home/mjibson/go/src/github.com/mjibson/plan9"),
 			None,
 		)
 		.unwrap();
