@@ -209,12 +209,6 @@ impl Server {
 	}
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
-		for (_, p) in &self.progress {
-			write!(&mut body, "{}\n", p)?;
-		}
-		if self.progress.len() > 0 {
-			body.push('\n');
-		}
 		for (_, ds) in &self.diags {
 			for d in ds {
 				write!(&mut body, "{}\n", d)?;
@@ -258,6 +252,12 @@ impl Server {
 		}
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
+		}
+		if self.progress.len() > 0 {
+			body.push('\n');
+		}
+		for (_, p) in &self.progress {
+			write!(&mut body, "{}\n", p)?;
 		}
 		if self.body != body {
 			self.body = body.clone();
