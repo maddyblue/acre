@@ -1,10 +1,11 @@
-use crossbeam_channel::{bounded, Receiver, Select, Sender};
+use crossbeam_channel::{bounded, Receiver, Select};
+use lsp_types::{request::*, *};
 use nine::p2000::OpenMode;
 use plan9::{acme::*, lsp, plumb};
-use serde_json;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read};
 use std::thread;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -16,18 +17,27 @@ fn main() -> Result<()> {
 		".rs".to_string(),
 		"rls",
 		std::iter::empty(),
-		"file:///home/mjibson/go/src/github.com/mjibson/plan9",
+		Some("file:///home/mjibson/go/src/github.com/mjibson/plan9"),
 		None,
 	)
 	.unwrap();
-	let mut s = Server::new(vec![rust_client])?;
+	let go_client = lsp::Client::new(
+		"gopls".to_string(),
+		".go".to_string(),
+		"gopls",
+		std::iter::empty(),
+		None,
+		Some(vec!["file:///home/mjibson/go/src/github.com/mjibson/esc"]),
+	)
+	.unwrap();
+	let mut s = Server::new(vec![rust_client, go_client])?;
 	s.wait()
 }
 
 struct Server {
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
-	// Sorted Vec of (names, win id) to know which order to print windows in.
+	// Sorted Vec of (filenames, win id) to know which order to print windows in.
 	names: Vec<(String, usize)>,
 	// Vec of (position, win id) to map Look locations to windows.
 	addr: Vec<(usize, usize)>,
@@ -41,17 +51,20 @@ struct Server {
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
-	guru_r: Receiver<String>,
-	guru_s: Sender<String>,
 	err_r: Receiver<Error>,
 
-	// name -> client
+	// client name -> client
 	clients: HashMap<String, lsp::Client>,
+	// client name -> capabilities
+	capabilities: HashMap<String, lsp_types::ServerCapabilities>,
+	// file name -> client name
+	files: HashMap<String, String>,
 }
 
 struct ServerWin {
 	name: String,
 	w: Win,
+	doc: TextDocumentIdentifier,
 }
 
 impl ServerWin {
@@ -60,6 +73,12 @@ impl ServerWin {
 		// TODO: convert these character (rune) offsets to byte offsets.
 		self.w.read_addr()
 	}
+	fn position(&mut self) -> Result<Position> {
+		let pos = self.pos()?;
+		let nl = NlOffsets::new(self.w.read(File::Body)?)?;
+		let (line, col) = nl.offset_to_line(pos.0 as u64);
+		Ok(Position::new(line, col))
+	}
 }
 
 impl Server {
@@ -67,7 +86,6 @@ impl Server {
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
-		let (guru_s, guru_r) = bounded(0);
 		let mut w = Win::new()?;
 		w.name("acre")?;
 		let mut wev = w.events()?;
@@ -88,10 +106,10 @@ impl Server {
 			diags: HashMap::new(),
 			log_r,
 			ev_r,
-			guru_r,
-			guru_s,
 			err_r,
 			clients: cls,
+			capabilities: HashMap::new(),
+			files: HashMap::new(),
 		};
 		let err_s1 = err_s.clone();
 		thread::Builder::new()
@@ -161,17 +179,29 @@ impl Server {
 			}
 		}
 		self.addr.clear();
-		for (name, id) in &self.names {
+		for (file_name, id) in &self.names {
 			self.addr.push((body.len(), *id));
 			write!(
 				&mut body,
-				"{}{}\n\t[definition] [describe] [referrers]\n",
-				if *name == self.focus { "*" } else { "" },
-				name
+				"{}{}\n\t",
+				if *file_name == self.focus { "*" } else { "" },
+				file_name
 			)?;
+			let client_name = self.files.get(file_name).unwrap();
+			let caps = match self.capabilities.get(client_name) {
+				Some(v) => v,
+				None => continue,
+			};
+			if caps.definition_provider.unwrap_or(false) {
+				body.push_str("[definition] ");
+			}
+			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
 		write!(&mut body, "-----\n")?;
+		if self.output.len() > 5 {
+			self.output.drain(5..);
+		}
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
 		}
@@ -189,8 +219,17 @@ impl Server {
 		let mut wins = WinInfo::windows()?;
 		self.names.clear();
 		wins.sort_by(|a, b| a.name.cmp(&b.name));
+		self.files.clear();
 		for wi in wins {
-			if !wi.name.ends_with(".go") {
+			let mut ok = false;
+			for (_, c) in &self.clients {
+				if wi.name.ends_with(&c.files) {
+					ok = true;
+					self.files.insert(wi.name.clone(), c.name.clone());
+					break;
+				}
+			}
+			if !ok {
 				continue;
 			}
 			self.names.push((wi.name.clone(), wi.id));
@@ -200,7 +239,13 @@ impl Server {
 					let mut fsys = FSYS.lock().unwrap();
 					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
 					let w = Win::open(&mut fsys, wi.id, ctl)?;
-					ServerWin { name: wi.name, w }
+					let doc =
+						TextDocumentIdentifier::new(Url::parse(&format!("file://{}", &wi.name))?);
+					ServerWin {
+						name: wi.name,
+						w,
+						doc,
+					}
 				}
 			};
 			ws.insert(wi.id, w);
@@ -208,53 +253,65 @@ impl Server {
 		self.ws = ws;
 		Ok(())
 	}
-	fn lsp_msg(&mut self, client: String, msg: lsp::DeMessage) -> Result<()> {
-		let client = &self.clients.get(&client).unwrap();
-		if let Some(method) = msg.method {
-			match method {
-				"window/progress" => {
-					let d: WindowProgress = serde_json::from_str(msg.params.unwrap().get())?;
-					let name = format!("{}-{}", client.name, d.id);
-					if d.done.unwrap_or(false) {
-						self.progress.remove(&name);
-					} else {
-						let pct: String = match d.percentage {
-							Some(v) => v.to_string(),
-							None => "?".to_string(),
-						};
-						let s = format!(
-							"[{}%] {}: {} ({})",
-							pct,
-							&name,
-							d.message.unwrap_or(""),
-							d.title.unwrap_or(""),
-						);
-						self.progress.insert(name, s);
-					}
-				}
-				"textDocument/publishDiagnostics" => {
-					let dp: lsp_types::PublishDiagnosticsParams =
-						serde_json::from_str(msg.params.unwrap().get())?;
-					let mut v = vec![];
-					let path = dp.uri.path();
-					for p in dp.diagnostics {
-						let msg = p.message.lines().next().unwrap_or("");
-						v.push(format!(
-							"{}:{}: [{:?}] {}",
-							path,
-							p.range.start.line + 1,
-							p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
-							msg,
-						));
-					}
-					self.diags.insert(path.to_string(), v);
-				}
-				_ => {
-					println!("unrecognized method: {:?}", msg);
-				}
+	fn lsp_msg(&mut self, client_name: String, msg: Box<dyn Any>) -> Result<()> {
+		let client = &self.clients.get(&client_name).unwrap();
+		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
+			self.output.insert(0, format!("{}", msg.message));
+		} else if let Some(msg) = msg.downcast_ref::<lsp::WindowProgress>() {
+			let name = format!("{}-{}", client.name, msg.id);
+			if msg.done.unwrap_or(false) {
+				self.progress.remove(&name);
+			} else {
+				let pct: String = match msg.percentage {
+					Some(v) => v.to_string(),
+					None => "?".to_string(),
+				};
+				let s = format!(
+					"[{}%] {}: {} ({})",
+					pct,
+					&name,
+					msg.message.as_ref().unwrap_or(&"".to_string()),
+					msg.title.as_ref().unwrap_or(&"".to_string()),
+				);
+				self.progress.insert(name, s);
+			}
+		} else if let Some(msg) = msg.downcast_ref::<lsp_types::PublishDiagnosticsParams>() {
+			let mut v = vec![];
+			let path = msg.uri.path();
+			for p in &msg.diagnostics {
+				let msg = p.message.lines().next().unwrap_or("");
+				v.push(format!(
+					"{}:{}: [{:?}] {}",
+					path,
+					p.range.start.line + 1,
+					p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
+					msg,
+				));
+			}
+			self.diags.insert(path.to_string(), v);
+		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
+			self.capabilities
+				.insert(client_name, msg.capabilities.clone());
+		} else if let Some(msg) = msg.downcast_ref::<Option<GotoDefinitionResponse>>() {
+			if let Some(msg) = msg {
+				match msg {
+					GotoDefinitionResponse::Array(locs) => match locs.len() {
+						0 => {}
+						1 => {
+							let plumb = location_to_plumb(&locs[0]);
+							plumb_location(plumb)?;
+						}
+						_ => {
+							panic!("unknown definition response: {:?}", msg);
+						}
+					},
+					_ => panic!("unknown definition response: {:?}", msg),
+				};
 			}
 		} else {
-			println!("unhandled lsp msg: {:?}", msg);
+			// TODO: how do we get the underlying struct here so we
+			// know which message we are missing?
+			panic!("unrecognized msg: {:?}", msg);
 		}
 		Ok(())
 	}
@@ -277,33 +334,22 @@ impl Server {
 					}
 				}
 				if wid == 0 {
-					let f = plumb::open("send", OpenMode::WRITE)?;
-					let msg = plumb::Message {
-						dst: "edit".to_string(),
-						typ: "text".to_string(),
-						data: ev.text.into(),
-					};
-					return msg.send(f);
+					return plumb_location(ev.text);
 				}
 				let sw = self.ws.get_mut(&wid).unwrap();
-				let addr = sw.pos()?;
-				let pos = format!("{}:#{}", sw.name, addr.0);
-				let guru_s = self.guru_s.clone();
-				thread::spawn(move || {
-					let res = || -> Result<String> {
-						let res = Command::new("guru").arg(ev.text).arg(&pos).output()?;
-						let mut out = std::str::from_utf8(&res.stdout)?.trim().to_string();
-						if out.len() == 0 {
-							out = format!("{}: {}", pos, std::str::from_utf8(&res.stderr)?.trim());
-						}
-						Ok(out)
-					}();
-					let out = match res {
-						Ok(s) => s,
-						Err(e) => format!("{}", e),
-					};
-					guru_s.send(out).unwrap();
-				});
+				let pos = sw.position()?;
+				let client = self
+					.clients
+					.get_mut(self.files.get(&sw.name).unwrap())
+					.unwrap();
+				match ev.text.as_str() {
+					"definition" => {
+						client.send::<GotoDefinition, TextDocumentPositionParams>(
+							TextDocumentPositionParams::new(sw.doc.clone(), pos),
+						)?;
+					}
+					_ => panic!("unexpected text {}", ev.text),
+				};
 			}
 			_ => {}
 		}
@@ -317,9 +363,8 @@ impl Server {
 		let mut sel = Select::new();
 		let sel_log_r = sel.recv(&self.log_r);
 		let sel_ev_r = sel.recv(&self.ev_r);
-		let sel_guru_r = sel.recv(&self.guru_r);
 		let sel_err_r = sel.recv(&self.err_r);
-		let mut clients: HashMap<usize, (Receiver<Vec<u8>>, String)> = HashMap::new();
+		let mut clients = HashMap::new();
 		for (name, c) in &self.clients {
 			clients.insert(sel.recv(&c.msg_r), (c.msg_r.clone(), name.to_string()));
 		}
@@ -331,7 +376,6 @@ impl Server {
 			let mut sel = Select::new();
 			sel.recv(&self.log_r);
 			sel.recv(&self.ev_r);
-			sel.recv(&self.guru_r);
 			sel.recv(&self.err_r);
 			for (_, c) in &self.clients {
 				sel.recv(&c.msg_r);
@@ -362,18 +406,6 @@ impl Server {
 						break;
 					}
 				},
-				_ if index == sel_guru_r => match self.guru_r.recv() {
-					Ok(s) => {
-						self.output.insert(0, s);
-						if self.output.len() > 5 {
-							self.output.drain(5..);
-						}
-					}
-					Err(_) => {
-						println!("guru_r closed");
-						break;
-					}
-				},
 				_ if index == sel_err_r => match self.err_r.recv() {
 					Ok(v) => {
 						println!("err: {}", v);
@@ -387,9 +419,7 @@ impl Server {
 				_ => {
 					let (ch, name) = clients.get(&index).unwrap();
 					let msg = ch.recv()?;
-					let d: lsp::DeMessage = serde_json::from_slice(&msg)?;
-					println!("msg: {}", std::str::from_utf8(&msg).unwrap());
-					self.lsp_msg(name.to_string(), d)?;
+					self.lsp_msg(name.to_string(), msg)?;
 				}
 			};
 		}
@@ -404,11 +434,61 @@ impl Drop for Server {
 	}
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct WindowProgress<'a> {
-	done: Option<bool>,
-	id: &'a str,
-	message: Option<&'a str>,
-	title: Option<&'a str>,
-	percentage: Option<f64>,
+#[derive(Debug)]
+struct NlOffsets {
+	nl: Vec<u64>,
+	leftover: u64,
+}
+
+impl NlOffsets {
+	fn new<R: Read>(r: R) -> Result<NlOffsets> {
+		let mut r = BufReader::new(r);
+		let mut nl = vec![];
+		let mut o = 0;
+		let mut line = vec![];
+		let mut leftover = 0;
+		loop {
+			line.clear();
+			let sz = r.read_until('\n' as u8, &mut line)?;
+			if sz == 0 {
+				break;
+			}
+			let n = std::str::from_utf8(&line)?.chars().count() as u64;
+			let last: u8 = *line.last().unwrap();
+			if last != '\n' as u8 {
+				leftover = n;
+				break;
+			}
+			o += n;
+			nl.push(o);
+		}
+		Ok(NlOffsets { nl, leftover })
+	}
+	// returns line, col
+	fn offset_to_line(self, offset: u64) -> (u64, u64) {
+		for (i, o) in self.nl.iter().enumerate() {
+			if *o > offset {
+				return (i as u64 - 1, offset - self.nl[i - 1]);
+			}
+		}
+		let i = self.nl.len() - 1;
+		if offset >= self.nl[i] {
+			return (i as u64, offset - self.nl[i]);
+		}
+		panic!("unreachable");
+	}
+}
+
+fn location_to_plumb(l: &Location) -> String {
+	format!("{}:{}", l.uri.path(), l.range.start.line + 1,)
+}
+
+fn plumb_location(loc: String) -> Result<()> {
+	let f = plumb::open("send", OpenMode::WRITE)?;
+	let msg = plumb::Message {
+		dst: "edit".to_string(),
+		typ: "text".to_string(),
+		data: loc.into(),
+	};
+	return msg.send(f);
 }

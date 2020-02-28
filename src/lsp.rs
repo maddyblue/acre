@@ -3,17 +3,21 @@ use crossbeam_channel::{unbounded, Receiver};
 use lsp_types::{request::*, *};
 use serde::ser::Serialize;
 use serde_json;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::any::Any;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct Client {
 	pub name: String,
 	proc: Child,
-	files: String,
+	pub files: String,
 	stdin: ChildStdin,
 	next_id: usize,
-	pub msg_r: Receiver<Vec<u8>>,
+	id_map: Arc<Mutex<HashMap<usize, String>>>,
+	pub msg_r: Receiver<Box<dyn Send + Any>>,
 }
 
 impl Client {
@@ -23,7 +27,7 @@ impl Client {
 		files: String,
 		program: S,
 		args: I,
-		root_uri: &str,
+		root_uri: Option<&str>,
 		workspace_folders: Option<Vec<&str>>,
 	) -> Result<Client>
 	where
@@ -45,7 +49,9 @@ impl Client {
 			stdin,
 			next_id: 1,
 			msg_r,
+			id_map: Arc::new(Mutex::new(HashMap::new())),
 		};
+		let im = Arc::clone(&c.id_map);
 		thread::spawn(move || loop {
 			let mut line = String::new();
 			let mut content_len: usize = 0;
@@ -73,8 +79,45 @@ impl Client {
 			}
 			let mut v = vec![0u8; content_len];
 			stdout.read_exact(&mut v).unwrap();
-			//println!("got: {}", std::str::from_utf8(&v).unwrap());
-			msg_s.send(v).unwrap();
+			println!("got: {}", std::str::from_utf8(&v).unwrap());
+			let msg: DeMessage = serde_json::from_reader(Cursor::new(&v)).unwrap();
+			let d: Box<dyn Send + Any> = if let Some(err) = msg.error {
+				Box::new(err)
+			} else if let Some(id) = msg.id {
+				let typ = im.lock().unwrap().remove(&id).unwrap();
+				// TODO: figure out how to pass the structs over the chan instead of strings.
+				match typ.as_str() {
+					Initialize::METHOD => Box::new(
+						serde_json::from_str::<InitializeResult>(msg.result.unwrap().get())
+							.unwrap(),
+					),
+					GotoDefinition::METHOD => Box::new(
+						serde_json::from_str::<Option<GotoDefinitionResponse>>(
+							msg.result.unwrap().get(),
+						)
+						.unwrap(),
+					),
+					_ => panic!("unrecognized type: {}", typ),
+				}
+			} else if let Some(method) = msg.method {
+				match method.as_str() {
+					"window/progress" => Box::new(
+						serde_json::from_str::<WindowProgress>(msg.params.unwrap().get()).unwrap(),
+					),
+					"textDocument/publishDiagnostics" => Box::new(
+						serde_json::from_str::<lsp_types::PublishDiagnosticsParams>(
+							msg.params.unwrap().get(),
+						)
+						.unwrap(),
+					),
+					_ => {
+						panic!("unrecognized method: {}", method);
+					}
+				}
+			} else {
+				panic!("unhandled lsp msg: {:?}", msg);
+			};
+			msg_s.send(d).unwrap();
 		});
 		// TODO: remove the unwrap here. Unsure how to bubble up errors
 		// from a closure.
@@ -89,21 +132,25 @@ impl Client {
 			),
 			None => None,
 		};
-		let i = InitializeParams {
+		let root_uri = match root_uri {
+			Some(u) => Some(Url::parse(u)?),
+			None => None,
+		};
+		c.send::<Initialize, InitializeParams>(InitializeParams {
 			process_id: Some(1),
 			root_path: None,
-			root_uri: Some(Url::parse(root_uri)?),
+			root_uri,
 			initialization_options: None,
 			capabilities: ClientCapabilities::default(),
 			trace: None,
 			workspace_folders,
 			client_info: None,
-		};
-		c.send::<Initialize, InitializeParams>(i).unwrap();
+		})
+		.unwrap();
 		Ok(c)
 	}
 	pub fn send<R: Request, S: Serialize>(&mut self, params: S) -> Result<()> {
-		let id = self.new_id()?;
+		let id = self.new_id::<R>()?;
 		let msg = Message {
 			jsonrpc: "2.0",
 			id,
@@ -119,9 +166,13 @@ impl Client {
 		self.proc.wait()?;
 		Ok(())
 	}
-	fn new_id(&mut self) -> Result<usize> {
+	fn new_id<R: Request>(&mut self) -> Result<usize> {
 		let id = self.next_id;
 		self.next_id += 1;
+		self.id_map
+			.lock()
+			.unwrap()
+			.insert(id, R::METHOD.to_string());
 		Ok(id)
 	}
 }
@@ -141,13 +192,11 @@ struct Message<P> {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct DeMessage<'a> {
+pub struct DeMessage {
 	pub id: Option<usize>,
-	pub method: Option<&'a str>,
-	#[serde(borrow)]
-	pub params: Option<&'a serde_json::value::RawValue>,
-	#[serde(borrow)]
-	pub result: Option<&'a serde_json::value::RawValue>,
+	pub method: Option<String>,
+	pub params: Option<Box<serde_json::value::RawValue>>,
+	pub result: Option<Box<serde_json::value::RawValue>>,
 	pub error: Option<ResponseError>,
 }
 
@@ -165,6 +214,7 @@ mod tests {
 	#[test]
 	fn lsp() {
 		let mut l = Client::new(
+			"rls".to_string(),
 			".rs".to_string(),
 			"rls",
 			std::iter::empty(),
@@ -174,4 +224,13 @@ mod tests {
 		.unwrap();
 		l.wait().unwrap();
 	}
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct WindowProgress {
+	pub done: Option<bool>,
+	pub id: String,
+	pub message: Option<String>,
+	pub title: Option<String>,
+	pub percentage: Option<f64>,
 }

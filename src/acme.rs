@@ -262,6 +262,11 @@ impl Win {
 		}
 		Ok((a[0].parse()?, a[1].parse()?))
 	}
+	pub fn read(&mut self, file: File) -> Result<&mut Fid> {
+		let f = self.fid(file);
+		f.seek(SeekFrom::Start(0))?;
+		Ok(f)
+	}
 }
 
 const EVENT_SIZE: usize = 256;
