@@ -243,6 +243,11 @@ impl Server {
 			if caps.hover_provider.unwrap_or(false) {
 				body.push_str("[hover] ");
 			}
+			if let Some(cap) = &caps.completion_provider {
+				if cap.resolve_provider.unwrap_or(false) {
+					body.push_str("[complete] ");
+				}
+			}
 			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
@@ -392,6 +397,28 @@ impl Server {
 					_ => panic!("unknown hover response: {:?}", msg),
 				};
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<CompletionResponse>>() {
+			if let Some(msg) = msg {
+				let mut o: Vec<String> = vec![];
+				match msg {
+					CompletionResponse::Array(cis) => {
+						for ci in cis {
+							let mut s = ci.label.clone();
+							if let Some(k) = ci.kind {
+								write!(&mut s, " ({:?})", k)?;
+							}
+							if let Some(d) = &ci.detail {
+								write!(&mut s, ": {}", d)?;
+							}
+							o.push(s);
+						}
+					}
+					_ => panic!("unknown completion response: {:?}", msg),
+				}
+				if o.len() > 0 {
+					self.output.insert(0, o.join("\n"));
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -437,6 +464,24 @@ impl Server {
 						client.send::<HoverRequest, TextDocumentPositionParams>(
 							TextDocumentPositionParams::new(sw.doc.clone(), pos),
 						)?;
+					}
+					"complete" => {
+						client.send::<Completion, CompletionParams>(CompletionParams {
+							text_document_position: TextDocumentPositionParams::new(
+								sw.doc.clone(),
+								pos,
+							),
+							work_done_progress_params: WorkDoneProgressParams {
+								work_done_token: None,
+							},
+							partial_result_params: PartialResultParams {
+								partial_result_token: None,
+							},
+							context: Some(CompletionContext {
+								trigger_kind: CompletionTriggerKind::Invoked,
+								trigger_character: None,
+							}),
+						})?;
 					}
 					_ => panic!("unexpected text {}", ev.text),
 				};
