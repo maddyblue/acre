@@ -165,11 +165,11 @@ impl Server {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
 							"new" | "del" | "focus" | "put" => {
-								println!("sending log event: {:?}", ev);
+								//println!("sending log event: {:?}", ev);
 								log_s.send(ev).unwrap();
 							}
 							_ => {
-								println!("log event: {:?}", ev);
+								//println!("log event: {:?}", ev);
 							}
 						},
 						Err(err) => {
@@ -184,7 +184,7 @@ impl Server {
 			.name("WindowEvents".to_string())
 			.spawn(move || loop {
 				let mut ev = wev.read_event().unwrap();
-				println!("window event: {:?}", ev);
+				//println!("window event: {:?}", ev);
 				match ev.c2 {
 					'x' | 'X' => match ev.text.as_str() {
 						"Del" => {
