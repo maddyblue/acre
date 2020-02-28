@@ -79,7 +79,9 @@ impl Client {
 			}
 			let mut v = vec![0u8; content_len];
 			stdout.read_exact(&mut v).unwrap();
-			println!("got: {}", std::str::from_utf8(&v).unwrap());
+			if cfg!(debug_assertions) {
+				println!("got: {}", std::str::from_utf8(&v).unwrap());
+			}
 			let msg: DeMessage = serde_json::from_reader(Cursor::new(&v)).unwrap();
 			let d: Box<dyn Send + Any> = if let Some(err) = msg.error {
 				Box::new(err)
@@ -167,7 +169,9 @@ impl Client {
 			params,
 		};
 		let s = serde_json::to_string(&msg)?;
-		println!("send request: {}", s);
+		if cfg!(debug_assertions) {
+			println!("send request: {}", s);
+		}
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
 		Ok(())
@@ -179,7 +183,9 @@ impl Client {
 			params,
 		};
 		let s = serde_json::to_string(&msg)?;
-		println!("send notification: {}", msg.method);
+		if cfg!(debug_assertions) {
+			println!("send notification: {}", msg.method);
+		}
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
 		Ok(())

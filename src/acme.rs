@@ -369,14 +369,12 @@ mod tests {
 	fn windows() {
 		let ws = WinInfo::windows().unwrap();
 		assert_ne!(ws.len(), 0);
-		println!("ws: {:?}", ws);
 	}
 
 	#[test]
 	fn log() {
 		let mut log = LogReader::new().unwrap();
-		let ev = log.read().unwrap();
-		println!("ev: {:?}", ev);
+		log.read().unwrap();
 	}
 
 	#[test]

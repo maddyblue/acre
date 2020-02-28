@@ -165,12 +165,9 @@ impl Server {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
 							"new" | "del" | "focus" | "put" => {
-								//println!("sending log event: {:?}", ev);
 								log_s.send(ev).unwrap();
 							}
-							_ => {
-								//println!("log event: {:?}", ev);
-							}
+							_ => {}
 						},
 						Err(err) => {
 							err_s1.send(err).unwrap();
@@ -184,7 +181,6 @@ impl Server {
 			.name("WindowEvents".to_string())
 			.spawn(move || loop {
 				let mut ev = wev.read_event().unwrap();
-				//println!("window event: {:?}", ev);
 				match ev.c2 {
 					'x' | 'X' => match ev.text.as_str() {
 						"Del" => {
@@ -554,7 +550,6 @@ impl Server {
 						}
 					},
 					Err(_) => {
-						println!("log_r closed");
 						break;
 					}
 				},
@@ -563,17 +558,14 @@ impl Server {
 						self.run_cmd(ev)?;
 					}
 					Err(_) => {
-						println!("ev_r closed");
 						break;
 					}
 				},
 				_ if index == sel_err_r => match self.err_r.recv() {
-					Ok(v) => {
-						println!("err: {}", v);
+					Ok(_) => {
 						break;
 					}
 					Err(_) => {
-						println!("err_r closed");
 						break;
 					}
 				},
@@ -584,7 +576,6 @@ impl Server {
 				}
 			};
 		}
-		println!("wait returning");
 		Ok(())
 	}
 }
