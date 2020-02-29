@@ -121,6 +121,12 @@ impl Client {
 						)
 						.unwrap(),
 					),
+					"window/showMessage" => Box::new(
+						serde_json::from_str::<lsp_types::ShowMessageParams>(
+							msg.params.unwrap().get(),
+						)
+						.unwrap(),
+					),
 					_ => {
 						panic!("unrecognized method: {}", method);
 					}

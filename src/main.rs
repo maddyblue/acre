@@ -359,6 +359,9 @@ impl Server {
 				));
 			}
 			self.diags.insert(path.to_string(), v);
+		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ShowMessageParams>() {
+			self.output
+				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
 			self.capabilities
 				.insert(client_name, msg.capabilities.clone());
