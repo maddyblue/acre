@@ -124,6 +124,10 @@ impl ServerWin {
 	fn did_change(&mut self, client: &mut lsp::Client) -> Result<()> {
 		client.notify::<DidChangeTextDocument, DidChangeTextDocumentParams>(self.change_params()?)
 	}
+	fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
+		let pos = self.position()?;
+		Ok(TextDocumentPositionParams::new(self.doc.clone(), pos))
+	}
 }
 
 impl Server {
@@ -237,6 +241,9 @@ impl Server {
 				if cap.resolve_provider.unwrap_or(false) {
 					body.push_str("[complete] ");
 				}
+			}
+			if caps.references_provider.unwrap_or(false) {
+				body.push_str("[references] ");
 			}
 			body.push('\n');
 		}
@@ -420,6 +427,13 @@ impl Server {
 					self.output.insert(0, o[0..n].join("\n"));
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<Location>>>() {
+			if let Some(msg) = msg {
+				let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(x)).collect();
+				if o.len() > 0 {
+					self.output.insert(0, o.join("\n"));
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -450,7 +464,6 @@ impl Server {
 					return plumb_location(ev.text);
 				}
 				let sw = self.ws.get_mut(&wid).unwrap();
-				let pos = sw.position()?;
 				let client = self
 					.clients
 					.get_mut(self.files.get(&sw.name).unwrap())
@@ -459,20 +472,16 @@ impl Server {
 				match ev.text.as_str() {
 					"definition" => {
 						client.send::<GotoDefinition, TextDocumentPositionParams>(
-							TextDocumentPositionParams::new(sw.doc.clone(), pos),
+							sw.text_doc_pos()?,
 						)?;
 					}
 					"hover" => {
-						client.send::<HoverRequest, TextDocumentPositionParams>(
-							TextDocumentPositionParams::new(sw.doc.clone(), pos),
-						)?;
+						client
+							.send::<HoverRequest, TextDocumentPositionParams>(sw.text_doc_pos()?)?;
 					}
 					"complete" => {
 						client.send::<Completion, CompletionParams>(CompletionParams {
-							text_document_position: TextDocumentPositionParams::new(
-								sw.doc.clone(),
-								pos,
-							),
+							text_document_position: sw.text_doc_pos()?,
 							work_done_progress_params: WorkDoneProgressParams {
 								work_done_token: None,
 							},
@@ -483,6 +492,17 @@ impl Server {
 								trigger_kind: CompletionTriggerKind::Invoked,
 								trigger_character: None,
 							}),
+						})?;
+					}
+					"references" => {
+						client.send::<References, ReferenceParams>(ReferenceParams {
+							text_document_position: sw.text_doc_pos()?,
+							work_done_progress_params: WorkDoneProgressParams {
+								work_done_token: None,
+							},
+							context: ReferenceContext {
+								include_declaration: true,
+							},
 						})?;
 					}
 					_ => panic!("unexpected text {}", ev.text),
