@@ -245,6 +245,9 @@ impl Server {
 			if caps.references_provider.unwrap_or(false) {
 				body.push_str("[references] ");
 			}
+			if caps.document_symbol_provider.unwrap_or(false) {
+				body.push_str("[symbols] ");
+			}
 			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
@@ -434,6 +437,41 @@ impl Server {
 					self.output.insert(0, o.join("\n"));
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<DocumentSymbolResponse>>() {
+			if let Some(msg) = msg {
+				let mut o: Vec<String> = vec![];
+				match msg {
+					DocumentSymbolResponse::Flat(sis) => {
+						for si in sis {
+							// Ignore variables in methods.
+							if si.container_name.as_ref().unwrap_or(&"".to_string()).len() == 0
+								&& si.kind == SymbolKind::Variable
+							{
+								continue;
+							}
+							o.push(format!(
+								"{}{} ({:?}): {}",
+								if let Some(c) = &si.container_name {
+									if c.len() > 0 {
+										format!("{}.", c)
+									} else {
+										"".to_string()
+									}
+								} else {
+									"".to_string()
+								},
+								si.name,
+								si.kind,
+								location_to_plumb(&si.location),
+							));
+						}
+					}
+					_ => panic!("unknown symbol response: {:?}", msg),
+				}
+				if o.len() > 0 {
+					self.output.insert(0, o.join("\n"));
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -504,6 +542,13 @@ impl Server {
 								include_declaration: true,
 							},
 						})?;
+					}
+					"symbols" => {
+						client.send::<DocumentSymbolRequest, DocumentSymbolParams>(
+							DocumentSymbolParams {
+								text_document: TextDocumentIdentifier::new(sw.url.clone()),
+							},
+						)?;
 					}
 					_ => panic!("unexpected text {}", ev.text),
 				};
