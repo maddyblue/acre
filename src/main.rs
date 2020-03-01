@@ -565,7 +565,12 @@ impl Server {
 		Ok(())
 	}
 	fn cmd_put(&mut self, id: usize) -> Result<()> {
-		let sw = self.ws.get_mut(&id).unwrap();
+		let sw = if let Some(sw) = self.ws.get_mut(&id) {
+			sw
+		} else {
+			// Ignore unknown ids (untracked files, zerox, etc.).
+			return Ok(());
+		};
 		let client = self.clients.get_mut(&sw.client).unwrap();
 		sw.did_change(client)?;
 		client.notify::<DidSaveTextDocument, DidSaveTextDocumentParams>(
