@@ -21,6 +21,7 @@ struct ConnWriter {
 	stream: UnixStream,
 	nextfid: u32,
 	next_tag: u16,
+	free_tags: Vec<u16>,
 }
 
 impl Conn {
@@ -32,11 +33,13 @@ impl Conn {
 				stream,
 				nextfid: 1,
 				next_tag: 0,
+				free_tags: vec![],
 			})),
 			msize: 131072,
 			tag_map: Arc::new(Mutex::new(HashMap::new())),
 		};
 		let tm = Arc::clone(&c.tag_map);
+		let cw = Arc::clone(&c.writer);
 
 		thread::spawn(move || loop {
 			let mut size: u32 = Conn::read_a(&reader).unwrap();
@@ -55,6 +58,7 @@ impl Conn {
 				.unwrap()
 				.remove(&tag)
 				.expect(format!("expected receiver with tag {:?}", tag).as_str());
+			cw.lock().unwrap().free_tags.push(tag);
 			s.send(data).unwrap();
 		});
 
@@ -78,11 +82,15 @@ impl Conn {
 
 	fn new_tag(&mut self) -> Result<(u16, Receiver<Vec<u8>>)> {
 		let mut cw = self.writer.lock().unwrap();
-		if cw.next_tag == NOTAG {
+		let tag: u16;
+		if cw.free_tags.len() > 0 {
+			tag = cw.free_tags.remove(0);
+		} else if cw.next_tag == NOTAG {
 			return Err(err_str(format!("out of tags")));
+		} else {
+			tag = cw.next_tag;
+			cw.next_tag += 1;
 		}
-		let tag = cw.next_tag;
-		cw.next_tag += 1;
 		let (s, r) = bounded(0);
 		self.tag_map.lock().unwrap().insert(tag, s);
 		Ok((tag, r))
