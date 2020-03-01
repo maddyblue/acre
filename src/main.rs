@@ -169,9 +169,16 @@ impl Server {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
 							"new" | "del" | "focus" | "put" => {
+								if cfg!(debug_assertions) {
+									println!("log reader: {:?}", ev);
+								}
 								log_s.send(ev).unwrap();
 							}
-							_ => {}
+							_ => {
+								if cfg!(debug_assertions) {
+									println!("log reader: {:?} [uncaught]", ev);
+								}
+							}
 						},
 						Err(err) => {
 							err_s1.send(err).unwrap();
