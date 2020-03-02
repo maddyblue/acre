@@ -122,7 +122,7 @@ impl ServerWin {
 		})
 	}
 	fn did_change(&mut self, client: &mut lsp::Client) -> Result<()> {
-		client.notify::<DidChangeTextDocument, DidChangeTextDocumentParams>(self.change_params()?)
+		client.notify::<DidChangeTextDocument>(self.change_params()?)
 	}
 	fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
 		let pos = self.position()?;
@@ -312,16 +312,14 @@ impl Server {
 					drop(fsys);
 					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
 					let (version, text) = sw.text()?;
-					client.notify::<DidOpenTextDocument, DidOpenTextDocumentParams>(
-						DidOpenTextDocumentParams {
-							text_document: TextDocumentItem::new(
-								sw.url.clone(),
-								sw.lang_id.clone(),
-								version,
-								text,
-							),
-						},
-					)?;
+					client.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+						text_document: TextDocumentItem::new(
+							sw.url.clone(),
+							sw.lang_id.clone(),
+							version,
+							text,
+						),
+					})?;
 
 					sw
 				}
@@ -331,11 +329,9 @@ impl Server {
 		// close remaining files
 		for (_, w) in &self.ws {
 			let client = self.clients.get_mut(&w.client).unwrap();
-			client.notify::<DidCloseTextDocument, DidCloseTextDocumentParams>(
-				DidCloseTextDocumentParams {
-					text_document: w.doc.clone(),
-				},
-			)?;
+			client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+				text_document: w.doc.clone(),
+			})?;
 		}
 		self.ws = ws;
 		Ok(())
@@ -516,16 +512,13 @@ impl Server {
 				sw.did_change(client)?;
 				match ev.text.as_str() {
 					"definition" => {
-						client.send::<GotoDefinition, TextDocumentPositionParams>(
-							sw.text_doc_pos()?,
-						)?;
+						client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
 					}
 					"hover" => {
-						client
-							.send::<HoverRequest, TextDocumentPositionParams>(sw.text_doc_pos()?)?;
+						client.send::<HoverRequest>(sw.text_doc_pos()?)?;
 					}
 					"complete" => {
-						client.send::<Completion, CompletionParams>(CompletionParams {
+						client.send::<Completion>(CompletionParams {
 							text_document_position: sw.text_doc_pos()?,
 							work_done_progress_params: WorkDoneProgressParams {
 								work_done_token: None,
@@ -540,7 +533,7 @@ impl Server {
 						})?;
 					}
 					"references" => {
-						client.send::<References, ReferenceParams>(ReferenceParams {
+						client.send::<References>(ReferenceParams {
 							text_document_position: sw.text_doc_pos()?,
 							work_done_progress_params: WorkDoneProgressParams {
 								work_done_token: None,
@@ -551,11 +544,9 @@ impl Server {
 						})?;
 					}
 					"symbols" => {
-						client.send::<DocumentSymbolRequest, DocumentSymbolParams>(
-							DocumentSymbolParams {
-								text_document: TextDocumentIdentifier::new(sw.url.clone()),
-							},
-						)?;
+						client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
+							text_document: TextDocumentIdentifier::new(sw.url.clone()),
+						})?;
 					}
 					_ => panic!("unexpected text {}", ev.text),
 				};
@@ -573,11 +564,9 @@ impl Server {
 		};
 		let client = self.clients.get_mut(&sw.client).unwrap();
 		sw.did_change(client)?;
-		client.notify::<DidSaveTextDocument, DidSaveTextDocumentParams>(
-			DidSaveTextDocumentParams {
-				text_document: sw.doc.clone(),
-			},
-		)?;
+		client.notify::<DidSaveTextDocument>(DidSaveTextDocumentParams {
+			text_document: sw.doc.clone(),
+		})?;
 		Ok(())
 	}
 	fn wait(&mut self) -> Result<()> {

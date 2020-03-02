@@ -1,7 +1,6 @@
 use crate::Result;
 use crossbeam_channel::{unbounded, Receiver};
 use lsp_types::{notification, request::*, *};
-use serde::ser::Serialize;
 use serde_json;
 use std::any::Any;
 use std::collections::HashMap;
@@ -163,7 +162,7 @@ impl Client {
 			Some(u) => Some(Url::parse(u)?),
 			None => None,
 		};
-		c.send::<Initialize, InitializeParams>(InitializeParams {
+		c.send::<Initialize>(InitializeParams {
 			process_id: Some(1),
 			root_path: None,
 			root_uri,
@@ -176,7 +175,7 @@ impl Client {
 		.unwrap();
 		Ok(c)
 	}
-	pub fn send<R: Request, S: Serialize>(&mut self, params: S) -> Result<()> {
+	pub fn send<R: Request>(&mut self, params: R::Params) -> Result<()> {
 		let id = self.new_id::<R>()?;
 		let msg = Message {
 			jsonrpc: "2.0",
@@ -192,7 +191,7 @@ impl Client {
 		write!(self.stdin, "{}", s)?;
 		Ok(())
 	}
-	pub fn notify<N: notification::Notification, S: Serialize>(&mut self, params: S) -> Result<()> {
+	pub fn notify<N: notification::Notification>(&mut self, params: N::Params) -> Result<()> {
 		let msg = Notification {
 			jsonrpc: "2.0",
 			method: N::METHOD,
