@@ -118,10 +118,8 @@ impl WinEvents {
 	}
 	fn get_ch(&mut self) -> Result<char> {
 		let mut buf = [0; 1];
-		let sz = self.event.read(&mut buf)?;
-		if sz == 0 {
-			return Err(err_str(format!("expected another character")));
-		}
+		// TODO: figure out how to use a BufReader here to avoid a bunch of single reads.
+		self.event.read_exact(&mut buf)?;
 		Ok(buf[0] as char)
 	}
 	fn get_en(&mut self) -> Result<u32> {
