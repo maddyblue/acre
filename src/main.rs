@@ -349,18 +349,36 @@ impl Server {
 			if msg.done.unwrap_or(false) {
 				self.progress.remove(&name);
 			} else {
-				let pct: String = match msg.percentage {
-					Some(v) => v.to_string(),
-					None => "?".to_string(),
-				};
 				let s = format!(
 					"[{}%] {}: {} ({})",
-					pct,
+					format_pct(msg.percentage),
 					&name,
 					msg.message.as_ref().unwrap_or(&"".to_string()),
 					msg.title.as_ref().unwrap_or(&"".to_string()),
 				);
 				self.progress.insert(name, s);
+			}
+		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ProgressParams>() {
+			let name = format!("{}-{:?}", client.name, msg.token);
+			match &msg.value {
+				ProgressParamsValue::WorkDone(value) => match value {
+					WorkDoneProgress::Begin(value) => {
+						let s = format!(
+							"[{}%] {}: {} ({})",
+							format_pct(value.percentage),
+							&name,
+							value.message.as_ref().unwrap_or(&"".to_string()),
+							value.title
+						);
+						self.progress.insert(name, s);
+					}
+					WorkDoneProgress::Report(_) => {
+						// TODO: implement
+					}
+					WorkDoneProgress::End(_) => {
+						self.progress.remove(&name);
+					}
+				},
 			}
 		} else if let Some(msg) = msg.downcast_ref::<lsp_types::PublishDiagnosticsParams>() {
 			let mut v = vec![];
@@ -674,4 +692,11 @@ fn plumb_location(loc: String) -> Result<()> {
 		data: loc.into(),
 	};
 	return msg.send(f);
+}
+
+fn format_pct(pct: Option<f64>) -> String {
+	match pct {
+		Some(v) => v.to_string(),
+		None => "?".to_string(),
+	}
 }

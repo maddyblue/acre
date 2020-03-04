@@ -136,6 +136,12 @@ impl Client {
 						)
 						.unwrap(),
 					),
+					"$/progress" => Box::new(
+						serde_json::from_str::<lsp_types::ProgressParams>(
+							msg.params.unwrap().get(),
+						)
+						.unwrap(),
+					),
 					_ => {
 						panic!("unrecognized method: {}", method);
 					}
