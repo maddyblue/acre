@@ -13,12 +13,12 @@ type Result<T> = std::result::Result<T, Error>;
 
 fn main() -> Result<()> {
 	let rust_client = lsp::Client::new(
-		"rls".to_string(),
+		"rust-analyzer".to_string(),
 		".rs".to_string(),
-		"rls",
+		"rust-analyzer",
 		std::iter::empty(),
-		Some("file:///home/mjibson/go/src/github.com/mjibson/acre"),
 		None,
+		Some(vec!["file:///home/mjibson/go/src/github.com/mjibson/acre"]),
 	)
 	.unwrap();
 	/*
