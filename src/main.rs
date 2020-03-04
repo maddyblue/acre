@@ -432,6 +432,9 @@ impl Server {
 						}
 						self.output.insert(0, o.join("\n"));
 					}
+					HoverContents::Markup(mc) => {
+						self.output.insert(0, mc.value.clone());
+					}
 					_ => panic!("unknown hover response: {:?}", msg),
 				};
 			}
