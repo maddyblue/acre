@@ -291,6 +291,10 @@ impl Server {
 			let mut client = None;
 			for (_, c) in self.clients.iter_mut() {
 				if wi.name.ends_with(&c.files) {
+					// Don't open windows for a client that hasn't initialized yet.
+					if !self.capabilities.contains_key(&c.name) {
+						continue;
+					}
 					self.files.insert(wi.name.clone(), c.name.clone());
 					client = Some(c);
 					break;
@@ -376,8 +380,11 @@ impl Server {
 			self.output
 				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
+			let client = self.clients.get_mut(&client_name).unwrap();
+			client.notify::<Initialized>(InitializedParams {})?;
 			self.capabilities
 				.insert(client_name, msg.capabilities.clone());
+			self.sync_windows()?;
 		} else if let Some(msg) = msg.downcast_ref::<Option<GotoDefinitionResponse>>() {
 			if let Some(msg) = msg {
 				match msg {
