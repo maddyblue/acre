@@ -258,9 +258,9 @@ pub struct DeMessage {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ResponseError {
-	pub code: usize,
+	pub code: i64,
 	pub message: String,
-	pub data: serde_json::Value,
+	pub data: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
