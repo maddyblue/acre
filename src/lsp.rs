@@ -86,36 +86,29 @@ impl Client {
 				Box::new(err)
 			} else if let Some(id) = msg.id {
 				let typ = im.lock().unwrap().remove(&id).unwrap();
+				let res = match msg.result {
+					Some(res) => res,
+					None => continue,
+				};
 				// TODO: figure out how to pass the structs over the chan instead of strings.
 				match typ.as_str() {
-					Initialize::METHOD => Box::new(
-						serde_json::from_str::<InitializeResult>(msg.result.unwrap().get())
-							.unwrap(),
-					),
+					Initialize::METHOD => {
+						Box::new(serde_json::from_str::<InitializeResult>(res.get()).unwrap())
+					}
 					GotoDefinition::METHOD => Box::new(
-						serde_json::from_str::<Option<GotoDefinitionResponse>>(
-							msg.result.unwrap().get(),
-						)
-						.unwrap(),
+						serde_json::from_str::<Option<GotoDefinitionResponse>>(res.get()).unwrap(),
 					),
-					HoverRequest::METHOD => Box::new(
-						serde_json::from_str::<Option<Hover>>(msg.result.unwrap().get()).unwrap(),
-					),
+					HoverRequest::METHOD => {
+						Box::new(serde_json::from_str::<Option<Hover>>(res.get()).unwrap())
+					}
 					Completion::METHOD => Box::new(
-						serde_json::from_str::<Option<CompletionResponse>>(
-							msg.result.unwrap().get(),
-						)
-						.unwrap(),
+						serde_json::from_str::<Option<CompletionResponse>>(res.get()).unwrap(),
 					),
-					References::METHOD => Box::new(
-						serde_json::from_str::<Option<Vec<Location>>>(msg.result.unwrap().get())
-							.unwrap(),
-					),
+					References::METHOD => {
+						Box::new(serde_json::from_str::<Option<Vec<Location>>>(res.get()).unwrap())
+					}
 					DocumentSymbolRequest::METHOD => Box::new(
-						serde_json::from_str::<Option<DocumentSymbolResponse>>(
-							msg.result.unwrap().get(),
-						)
-						.unwrap(),
+						serde_json::from_str::<Option<DocumentSymbolResponse>>(res.get()).unwrap(),
 					),
 					_ => panic!("unrecognized type: {}", typ),
 				}
