@@ -497,7 +497,21 @@ impl Server {
 							));
 						}
 					}
-					_ => panic!("unknown symbol response: {:?}", msg),
+					DocumentSymbolResponse::Nested(dss) => {
+						// TODO: handle nesting.
+						for ds in dss {
+							o.push(format! {
+								"{}{} ({:?}) :{}",
+								ds.name,
+								match &ds.detail {
+									Some(d) => format!(": {}", d),
+									None => "".to_string(),
+								},
+								ds.kind,
+								ds.range.start.line+1,
+							});
+						}
+					}
 				}
 				if o.len() > 0 {
 					self.output.insert(0, o.join("\n"));
