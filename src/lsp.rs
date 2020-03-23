@@ -85,6 +85,10 @@ impl Client {
 			let d: Box<dyn Send + Any> = if let Some(err) = msg.error {
 				Box::new(err)
 			} else if let Some(id) = msg.id {
+				if msg.params.is_some() {
+					println!("unsupported server -> client message");
+					continue;
+				}
 				let typ = im.lock().unwrap().remove(&id).unwrap();
 				let res = match msg.result {
 					Some(res) => res,
