@@ -2,6 +2,7 @@ use acre::{acme::*, lsp, plumb};
 use crossbeam_channel::{bounded, Receiver, Select};
 use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
+use serde::Deserialize;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -11,28 +12,52 @@ use std::thread;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Deserialize)]
+struct TomlConfig {
+	servers: Vec<ConfigServer>,
+}
+
+#[derive(Deserialize)]
+struct ConfigServer {
+	name: String,
+	executable: Option<String>,
+	extension: String,
+	root_uri: Option<String>,
+	workspace_folders: Option<Vec<String>>,
+}
+
 fn main() -> Result<()> {
-	let rust_client = lsp::Client::new(
-		"rust-analyzer".to_string(),
-		".rs".to_string(),
-		"rust-analyzer",
-		std::iter::empty(),
-		None,
-		Some(vec!["file:///home/mjibson/go/src/github.com/mjibson/acre"]),
-	)
-	.unwrap();
-	/*
-	let _go_client = lsp::Client::new(
-		"gopls".to_string(),
-		".go".to_string(),
-		"gopls",
-		std::iter::empty(),
-		None,
-		Some(vec!["file:///home/mjibson/go/src/github.com/mjibson/esc"]),
-	)
-	.unwrap();
-	*/
-	let mut s = Server::new(vec![rust_client])?;
+	let dir = xdg::BaseDirectories::new()?;
+	const ACRE_TOML: &str = "acre.toml";
+	let config = match dir.find_config_file(ACRE_TOML) {
+		Some(c) => c,
+		None => {
+			println!(
+				"could not find {} in config location (maybe ~/.config/acre.toml)",
+				ACRE_TOML,
+			);
+			std::process::exit(1);
+		}
+	};
+	let config = std::fs::read_to_string(config)?;
+	let config: TomlConfig = toml::from_str(&config)?;
+
+	let mut clients = vec![];
+	for server in config.servers {
+		clients.push(lsp::Client::new(
+			server.name.clone(),
+			server.extension,
+			server.executable.unwrap_or(server.name),
+			std::iter::empty(),
+			server.root_uri,
+			server.workspace_folders,
+		)?);
+	}
+	if clients.is_empty() {
+		println!("empty servers in configuration file");
+		std::process::exit(1);
+	}
+	let mut s = Server::new(clients)?;
 	s.wait()
 }
 
@@ -713,7 +738,7 @@ fn plumb_location(loc: String) -> Result<()> {
 
 fn format_pct(pct: Option<f64>) -> String {
 	match pct {
-		Some(v) => v.to_string(),
+		Some(v) => format!("{:.0}", v),
 		None => "?".to_string(),
 	}
 }

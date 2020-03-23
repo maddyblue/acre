@@ -26,18 +26,19 @@ impl Client {
 		files: String,
 		program: S,
 		args: I,
-		root_uri: Option<&str>,
-		workspace_folders: Option<Vec<&str>>,
+		root_uri: Option<String>,
+		workspace_folders: Option<Vec<String>>,
 	) -> Result<Client>
 	where
 		I: IntoIterator<Item = S>,
-		S: AsRef<std::ffi::OsStr>,
+		S: AsRef<std::ffi::OsStr> + std::fmt::Display + Clone,
 	{
-		let mut proc = Command::new(program)
+		let mut proc = Command::new(program.clone())
 			.args(args)
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())
-			.spawn()?;
+			.spawn()
+			.expect(&format!("could not execute: {}", program));
 		let mut stdout = BufReader::new(proc.stdout.take().unwrap());
 		let stdin = proc.stdin.take().unwrap();
 		let (msg_s, msg_r) = unbounded();
@@ -162,7 +163,7 @@ impl Client {
 			None => None,
 		};
 		let root_uri = match root_uri {
-			Some(u) => Some(Url::parse(u)?),
+			Some(u) => Some(Url::parse(&u)?),
 			None => None,
 		};
 		c.send::<Initialize>(InitializeParams {
@@ -271,7 +272,7 @@ mod tests {
 			".rs".to_string(),
 			"rls",
 			std::iter::empty(),
-			Some("file:///home/mjibson/go/src/github.com/mjibson/plan9"),
+			Some("file:///home/mjibson/go/src/github.com/mjibson/plan9".to_string()),
 			None,
 		)
 		.unwrap();
