@@ -320,6 +320,9 @@ impl Server {
 			if caps.document_symbol_provider.unwrap_or(false) {
 				body.push_str("[symbols] ");
 			}
+			if caps.signature_help_provider.is_some() {
+				body.push_str("[signature] ");
+			}
 			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
@@ -581,6 +584,16 @@ impl Server {
 					self.output.insert(0, o.join("\n"));
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<SignatureHelp>>() {
+			if let Some(msg) = msg {
+				let mut o: Vec<String> = vec![];
+				for sig in &msg.signatures {
+					o.push(sig.label.clone());
+				}
+				if o.len() > 0 {
+					self.output.insert(0, o.join("\n"));
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -653,6 +666,9 @@ impl Server {
 						client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
 							text_document: TextDocumentIdentifier::new(sw.url.clone()),
 						})?;
+					}
+					"signature" => {
+						client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
 					}
 					_ => panic!("unexpected text {}", ev.text),
 				};

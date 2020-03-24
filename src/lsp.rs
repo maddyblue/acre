@@ -115,6 +115,9 @@ impl Client {
 					DocumentSymbolRequest::METHOD => Box::new(
 						serde_json::from_str::<Option<DocumentSymbolResponse>>(res.get()).unwrap(),
 					),
+					SignatureHelpRequest::METHOD => {
+						Box::new(serde_json::from_str::<Option<SignatureHelp>>(res.get()).unwrap())
+					}
 					_ => panic!("unrecognized type: {}", typ),
 				}
 			} else if let Some(method) = msg.method {
