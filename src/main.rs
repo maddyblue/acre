@@ -303,10 +303,8 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
-			if let Some(cap) = &caps.completion_provider {
-				if cap.resolve_provider.unwrap_or(false) {
-					body.push_str("[complete] ");
-				}
+			if caps.completion_provider.is_some() {
+				body.push_str("[complete] ");
 			}
 			if caps.definition_provider.unwrap_or(false) {
 				body.push_str("[definition] ");
