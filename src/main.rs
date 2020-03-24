@@ -61,6 +61,46 @@ fn main() -> Result<()> {
 	s.wait()
 }
 
+struct Progress {
+	name: String,
+	percentage: Option<f64>,
+	message: Option<String>,
+	title: String,
+}
+
+impl Progress {
+	fn new(
+		name: String,
+		percentage: Option<f64>,
+		message: Option<String>,
+		title: Option<String>,
+	) -> Self {
+		Progress {
+			name,
+			percentage: percentage,
+			message: message,
+			title: title.unwrap_or("".to_string()),
+		}
+	}
+}
+
+impl std::fmt::Display for Progress {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(
+			f,
+			"[{}%] {}:{} ({})",
+			format_pct(self.percentage),
+			self.name,
+			if let Some(msg) = &self.message {
+				format!(" {}", msg)
+			} else {
+				"".to_string()
+			},
+			self.title,
+		)
+	}
+}
+
 struct Server {
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
@@ -72,7 +112,7 @@ struct Server {
 	body: String,
 	output: Vec<String>,
 	focus: String,
-	progress: HashMap<String, String>,
+	progress: HashMap<String, Progress>,
 	// file name -> list of diagnostics
 	diags: HashMap<String, Vec<String>>,
 
@@ -374,31 +414,30 @@ impl Server {
 			if msg.done.unwrap_or(false) {
 				self.progress.remove(&name);
 			} else {
-				let s = format!(
-					"[{}%] {}: {} ({})",
-					format_pct(msg.percentage),
-					&name,
-					msg.message.as_ref().unwrap_or(&"".to_string()),
-					msg.title.as_ref().unwrap_or(&"".to_string()),
+				self.progress.insert(
+					name.clone(),
+					Progress::new(name, msg.percentage, msg.message.clone(), msg.title.clone()),
 				);
-				self.progress.insert(name, s);
 			}
 		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ProgressParams>() {
 			let name = format!("{}-{:?}", client.name, msg.token);
 			match &msg.value {
 				ProgressParamsValue::WorkDone(value) => match value {
 					WorkDoneProgress::Begin(value) => {
-						let s = format!(
-							"[{}%] {}: {} ({})",
-							format_pct(value.percentage),
-							&name,
-							value.message.as_ref().unwrap_or(&"".to_string()),
-							value.title
+						self.progress.insert(
+							name.clone(),
+							Progress::new(
+								name,
+								value.percentage,
+								value.message.clone(),
+								Some(value.title.clone()),
+							),
 						);
-						self.progress.insert(name, s);
 					}
-					WorkDoneProgress::Report(_) => {
-						// TODO: implement
+					WorkDoneProgress::Report(value) => {
+						let p = self.progress.get_mut(&name).unwrap();
+						p.percentage = value.percentage;
+						p.message = value.message.clone();
 					}
 					WorkDoneProgress::End(_) => {
 						self.progress.remove(&name);
