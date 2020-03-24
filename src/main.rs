@@ -77,8 +77,8 @@ impl Progress {
 	) -> Self {
 		Progress {
 			name,
-			percentage: percentage,
-			message: message,
+			percentage,
+			message,
 			title: title.unwrap_or("".to_string()),
 		}
 	}
