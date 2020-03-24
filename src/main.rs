@@ -115,6 +115,8 @@ struct Server {
 	progress: HashMap<String, Progress>,
 	// file name -> list of diagnostics
 	diags: HashMap<String, Vec<String>>,
+	// request (client_name, id) -> file Url
+	requests: HashMap<(String, usize), Url>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -163,10 +165,18 @@ impl ServerWin {
 		// TODO: convert these character (rune) offsets to byte offsets.
 		self.w.read_addr()
 	}
+	fn nl(&mut self) -> Result<NlOffsets> {
+		NlOffsets::new(self.w.read(File::Body)?)
+	}
 	fn position(&mut self) -> Result<Position> {
 		let pos = self.pos()?;
-		let nl = NlOffsets::new(self.w.read(File::Body)?)?;
+		let nl = self.nl()?;
 		let (line, col) = nl.offset_to_line(pos.0 as u64);
+		Ok(Position::new(line, col))
+	}
+	fn last(&mut self) -> Result<Position> {
+		let nl = self.nl()?;
+		let (line, col) = nl.last();
 		Ok(Position::new(line, col))
 	}
 	fn text(&mut self) -> Result<(i64, String)> {
@@ -217,6 +227,7 @@ impl Server {
 			body: "".to_string(),
 			focus: "".to_string(),
 			progress: HashMap::new(),
+			requests: HashMap::new(),
 			diags: HashMap::new(),
 			log_r,
 			ev_r,
@@ -303,6 +314,9 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
+			if caps.code_action_provider.is_some() {
+				body.push_str("[assist] ");
+			}
 			if caps.completion_provider.is_some() {
 				body.push_str("[complete] ");
 			}
@@ -311,6 +325,9 @@ impl Server {
 			}
 			if caps.hover_provider.unwrap_or(false) {
 				body.push_str("[hover] ");
+			}
+			if caps.code_lens_provider.is_some() {
+				body.push_str("[lens] ");
 			}
 			if caps.references_provider.unwrap_or(false) {
 				body.push_str("[references] ");
@@ -406,7 +423,7 @@ impl Server {
 		self.ws = ws;
 		Ok(())
 	}
-	fn lsp_msg(&mut self, client_name: String, msg: Box<dyn Any>) -> Result<()> {
+	fn lsp_msg(&mut self, client_name: String, id: Option<usize>, msg: Box<dyn Any>) -> Result<()> {
 		let client = &self.clients.get(&client_name).unwrap();
 		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
 			self.output.insert(0, format!("{}", msg.message));
@@ -592,6 +609,23 @@ impl Server {
 					self.output.insert(0, o.join("\n"));
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<CodeLens>>>() {
+			if let Some(msg) = msg {
+				let url = self.requests.get(&(client_name, id.unwrap())).unwrap();
+				let mut o: Vec<String> = vec![];
+				for lens in msg {
+					let loc = Location {
+						uri: url.clone(),
+						range: lens.range,
+					};
+					o.push(format!("{}", location_to_plumb(&loc)));
+				}
+				if o.len() > 0 {
+					self.output.insert(0, o.join("\n"));
+				}
+			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<CodeActionResponse>>() {
+			if let Some(_msg) = msg {}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -622,10 +656,8 @@ impl Server {
 					return plumb_location(ev.text);
 				}
 				let sw = self.ws.get_mut(&wid).unwrap();
-				let client = self
-					.clients
-					.get_mut(self.files.get(&sw.name).unwrap())
-					.unwrap();
+				let client_name = self.files.get(&sw.name).unwrap();
+				let client = self.clients.get_mut(client_name).unwrap();
 				sw.did_change(client)?;
 				match ev.text.as_str() {
 					"definition" => {
@@ -667,6 +699,43 @@ impl Server {
 					}
 					"signature" => {
 						client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
+					}
+					"lens" => {
+						let id = client.send::<CodeLensRequest>(CodeLensParams {
+							text_document: TextDocumentIdentifier::new(sw.url.clone()),
+							work_done_progress_params: WorkDoneProgressParams {
+								work_done_token: None,
+							},
+							partial_result_params: PartialResultParams {
+								partial_result_token: None,
+							},
+						})?;
+						self.requests
+							.insert((client_name.to_string(), id), sw.url.clone());
+					}
+					"assist" => {
+						let id = client.send::<CodeActionRequest>(CodeActionParams {
+							text_document: TextDocumentIdentifier::new(sw.url.clone()),
+							range: Range {
+								start: Position {
+									line: 0,
+									character: 0,
+								},
+								end: sw.last()?,
+							},
+							context: CodeActionContext {
+								diagnostics: vec![],
+								only: None,
+							},
+							work_done_progress_params: WorkDoneProgressParams {
+								work_done_token: None,
+							},
+							partial_result_params: PartialResultParams {
+								partial_result_token: None,
+							},
+						})?;
+						self.requests
+							.insert((client_name.to_string(), id), sw.url.clone());
 					}
 					_ => panic!("unexpected text {}", ev.text),
 				};
@@ -760,8 +829,8 @@ impl Server {
 				},
 				_ => {
 					let (ch, name) = clients.get(&index).unwrap();
-					let msg = ch.recv()?;
-					self.lsp_msg(name.to_string(), msg)?;
+					let (id, msg) = ch.recv()?;
+					self.lsp_msg(name.to_string(), id, msg)?;
 				}
 			};
 		}

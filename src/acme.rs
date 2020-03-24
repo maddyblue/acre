@@ -343,6 +343,14 @@ impl NlOffsets {
 		}
 		panic!("unreachable");
 	}
+	// returns the position of the last character in the file.
+	pub fn last(&self) -> (u64, u64) {
+		if self.nl.is_empty() {
+			(0, self.leftover)
+		} else {
+			(self.nl.len() as u64 - 1, self.leftover)
+		}
+	}
 }
 
 #[cfg(test)]
@@ -361,6 +369,8 @@ mod tests {
 		assert_eq!(n.offset_to_line(7), (1, 1));
 		assert_eq!(n.offset_to_line(9), (1, 3));
 		assert_eq!(n.offset_to_line(10), (2, 0));
+		assert_eq!(n.offset_to_line(11), (2, 1));
+		assert_eq!(n.last(), (2, 2));
 	}
 
 	#[test]

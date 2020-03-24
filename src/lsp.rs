@@ -6,7 +6,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 pub struct Client {
@@ -16,7 +17,7 @@ pub struct Client {
 	stdin: ChildStdin,
 	next_id: usize,
 	id_map: Arc<Mutex<HashMap<usize, String>>>,
-	pub msg_r: Receiver<Box<dyn Send + Any>>,
+	pub msg_r: Receiver<(Option<usize>, Box<dyn Send + Any>)>,
 }
 
 impl Client {
@@ -118,6 +119,12 @@ impl Client {
 					SignatureHelpRequest::METHOD => {
 						Box::new(serde_json::from_str::<Option<SignatureHelp>>(res.get()).unwrap())
 					}
+					CodeLensRequest::METHOD => {
+						Box::new(serde_json::from_str::<Option<Vec<CodeLens>>>(res.get()).unwrap())
+					}
+					CodeActionRequest::METHOD => Box::new(
+						serde_json::from_str::<Option<CodeActionResponse>>(res.get()).unwrap(),
+					),
 					_ => panic!("unrecognized type: {}", typ),
 				}
 			} else if let Some(method) = msg.method {
@@ -150,7 +157,7 @@ impl Client {
 			} else {
 				panic!("unhandled lsp msg: {:?}", msg);
 			};
-			msg_s.send(d).unwrap();
+			msg_s.send((msg.id, d)).unwrap();
 		});
 		// TODO: remove the unwrap here. Unsure how to bubble up errors
 		// from a closure.
@@ -182,7 +189,7 @@ impl Client {
 		.unwrap();
 		Ok(c)
 	}
-	pub fn send<R: Request>(&mut self, params: R::Params) -> Result<()> {
+	pub fn send<R: Request>(&mut self, params: R::Params) -> Result<usize> {
 		let id = self.new_id::<R>()?;
 		let msg = Message {
 			jsonrpc: "2.0",
@@ -196,7 +203,7 @@ impl Client {
 		}
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
-		Ok(())
+		Ok(id)
 	}
 	pub fn notify<N: notification::Notification>(&mut self, params: N::Params) -> Result<()> {
 		let msg = Notification {
