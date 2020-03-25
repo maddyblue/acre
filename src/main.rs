@@ -117,6 +117,10 @@ struct Server {
 	diags: HashMap<String, Vec<String>>,
 	// request (client_name, id) -> file Url
 	requests: HashMap<(String, usize), Url>,
+	// (client_name, id) -> CA
+	actions: HashMap<(String, usize), CodeActionOrCommand>,
+	// Vec of position and (client_name, id) in the actions map.
+	action_addrs: Vec<(usize, (String, usize))>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -228,6 +232,8 @@ impl Server {
 			focus: "".to_string(),
 			progress: HashMap::new(),
 			requests: HashMap::new(),
+			actions: HashMap::new(),
+			action_addrs: vec![],
 			diags: HashMap::new(),
 			log_r,
 			ev_r,
@@ -346,6 +352,20 @@ impl Server {
 		if self.output.len() > MAX_LEN {
 			self.output.drain(MAX_LEN..);
 		}
+		self.action_addrs.clear();
+		for ((client_name, id), msg) in &self.actions {
+			self.action_addrs
+				.push((body.len(), (client_name.to_string(), *id)));
+			match msg {
+				CodeActionOrCommand::Command(cmd) => {
+					write!(&mut body, "\n[{}]\n", cmd.title)?;
+				}
+				CodeActionOrCommand::CodeAction(action) => {
+					write!(&mut body, "\n[{}]\n", action.title)?;
+				}
+			}
+		}
+		self.action_addrs.push((body.len(), ("".to_string(), 0)));
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
 		}
@@ -625,12 +645,119 @@ impl Server {
 				}
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<CodeActionResponse>>() {
-			if let Some(_msg) = msg {}
+			if let Some(msg) = msg {
+				self.actions.clear();
+				for action in msg {
+					self.actions
+						.insert((client_name.clone(), id.unwrap()), action.clone());
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
 			panic!("unrecognized msg: {:?}", msg);
 		}
+		Ok(())
+	}
+	fn run_event(&mut self, ev: Event, wid: usize) -> Result<()> {
+		let sw = self.ws.get_mut(&wid).unwrap();
+		let client_name = self.files.get(&sw.name).unwrap();
+		let client = self.clients.get_mut(client_name).unwrap();
+		sw.did_change(client)?;
+		match ev.text.as_str() {
+			"definition" => {
+				client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
+			}
+			"hover" => {
+				client.send::<HoverRequest>(sw.text_doc_pos()?)?;
+			}
+			"complete" => {
+				client.send::<Completion>(CompletionParams {
+					text_document_position: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+					context: Some(CompletionContext {
+						trigger_kind: CompletionTriggerKind::Invoked,
+						trigger_character: None,
+					}),
+				})?;
+			}
+			"references" => {
+				client.send::<References>(ReferenceParams {
+					text_document_position: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					context: ReferenceContext {
+						include_declaration: true,
+					},
+				})?;
+			}
+			"symbols" => {
+				client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
+					text_document: TextDocumentIdentifier::new(sw.url.clone()),
+				})?;
+			}
+			"signature" => {
+				client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
+			}
+			"lens" => {
+				let id = client.send::<CodeLensRequest>(CodeLensParams {
+					text_document: TextDocumentIdentifier::new(sw.url.clone()),
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+				})?;
+				self.requests
+					.insert((client_name.to_string(), id), sw.url.clone());
+			}
+			"assist" => {
+				let id = client.send::<CodeActionRequest>(CodeActionParams {
+					text_document: TextDocumentIdentifier::new(sw.url.clone()),
+					range: Range {
+						start: sw.position()?,
+						end: sw.last()?,
+					},
+					context: CodeActionContext {
+						diagnostics: vec![],
+						only: None,
+					},
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+				})?;
+				self.requests
+					.insert((client_name.to_string(), id), sw.url.clone());
+			}
+			_ => panic!("unexpected text {}", ev.text),
+		};
+		Ok(())
+	}
+	fn run_code_action(&mut self, client_name: String, id: usize) -> Result<()> {
+		let action = self.actions.get(&(client_name, id)).unwrap();
+		println!("run action {:?}", action);
+		match action {
+			CodeActionOrCommand::Command(cmd) => panic!("unsupported"),
+			CodeActionOrCommand::CodeAction(action) => {
+				if let Some(edit) = action.edit.clone() {
+					println!("edit: {:?}", edit);
+				}
+			}
+		}
+		Ok(())
+	}
+	fn apply_edit(&self, edit: WorkspaceEdit) -> Result<()> {
+		// TODO: implement
 		Ok(())
 	}
 	fn run_cmd(&mut self, ev: Event) -> Result<()> {
@@ -645,100 +772,33 @@ impl Server {
 				}
 			},
 			'L' => {
-				let mut wid: usize = 0;
-				for (pos, id) in self.addr.iter().rev() {
-					if (*pos as u32) < ev.q0 {
-						wid = *id;
-						break;
+				{
+					let mut wid = 0;
+					for (pos, id) in self.addr.iter().rev() {
+						if (*pos as u32) < ev.q0 {
+							wid = *id;
+							break;
+						}
+					}
+					if wid != 0 {
+						return self.run_event(ev, wid);
 					}
 				}
-				if wid == 0 {
-					return plumb_location(ev.text);
+				{
+					let mut name: String = "".to_string();
+					let mut rid = 0;
+					for (pos, (client_name, id)) in self.action_addrs.iter().rev() {
+						if (*pos as u32) < ev.q0 {
+							name = client_name.clone();
+							rid = *id;
+							break;
+						}
+					}
+					if rid != 0 {
+						return self.run_code_action(name, rid);
+					}
 				}
-				let sw = self.ws.get_mut(&wid).unwrap();
-				let client_name = self.files.get(&sw.name).unwrap();
-				let client = self.clients.get_mut(client_name).unwrap();
-				sw.did_change(client)?;
-				match ev.text.as_str() {
-					"definition" => {
-						client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
-					}
-					"hover" => {
-						client.send::<HoverRequest>(sw.text_doc_pos()?)?;
-					}
-					"complete" => {
-						client.send::<Completion>(CompletionParams {
-							text_document_position: sw.text_doc_pos()?,
-							work_done_progress_params: WorkDoneProgressParams {
-								work_done_token: None,
-							},
-							partial_result_params: PartialResultParams {
-								partial_result_token: None,
-							},
-							context: Some(CompletionContext {
-								trigger_kind: CompletionTriggerKind::Invoked,
-								trigger_character: None,
-							}),
-						})?;
-					}
-					"references" => {
-						client.send::<References>(ReferenceParams {
-							text_document_position: sw.text_doc_pos()?,
-							work_done_progress_params: WorkDoneProgressParams {
-								work_done_token: None,
-							},
-							context: ReferenceContext {
-								include_declaration: true,
-							},
-						})?;
-					}
-					"symbols" => {
-						client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
-							text_document: TextDocumentIdentifier::new(sw.url.clone()),
-						})?;
-					}
-					"signature" => {
-						client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
-					}
-					"lens" => {
-						let id = client.send::<CodeLensRequest>(CodeLensParams {
-							text_document: TextDocumentIdentifier::new(sw.url.clone()),
-							work_done_progress_params: WorkDoneProgressParams {
-								work_done_token: None,
-							},
-							partial_result_params: PartialResultParams {
-								partial_result_token: None,
-							},
-						})?;
-						self.requests
-							.insert((client_name.to_string(), id), sw.url.clone());
-					}
-					"assist" => {
-						let id = client.send::<CodeActionRequest>(CodeActionParams {
-							text_document: TextDocumentIdentifier::new(sw.url.clone()),
-							range: Range {
-								start: Position {
-									line: 0,
-									character: 0,
-								},
-								end: sw.last()?,
-							},
-							context: CodeActionContext {
-								diagnostics: vec![],
-								only: None,
-							},
-							work_done_progress_params: WorkDoneProgressParams {
-								work_done_token: None,
-							},
-							partial_result_params: PartialResultParams {
-								partial_result_token: None,
-							},
-						})?;
-						self.requests
-							.insert((client_name.to_string(), id), sw.url.clone());
-					}
-					_ => panic!("unexpected text {}", ev.text),
-				};
+				return plumb_location(ev.text);
 			}
 			_ => {}
 		}
