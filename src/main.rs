@@ -747,7 +747,7 @@ impl Server {
 		let action = self.actions.get(&(client_name, id)).unwrap();
 		println!("run action {:?}", action);
 		match action {
-			CodeActionOrCommand::Command(cmd) => panic!("unsupported"),
+			CodeActionOrCommand::Command(_cmd) => panic!("unsupported"),
 			CodeActionOrCommand::CodeAction(action) => {
 				if let Some(edit) = action.edit.clone() {
 					println!("edit: {:?}", edit);
@@ -756,7 +756,7 @@ impl Server {
 		}
 		Ok(())
 	}
-	fn apply_edit(&self, edit: WorkspaceEdit) -> Result<()> {
+	fn apply_edit(&self, _edit: WorkspaceEdit) -> Result<()> {
 		// TODO: implement
 		Ok(())
 	}
