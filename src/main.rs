@@ -445,6 +445,14 @@ impl Server {
 	}
 	fn lsp_msg(&mut self, client_name: String, id: Option<usize>, msg: Box<dyn Any>) -> Result<()> {
 		let client = &self.clients.get(&client_name).unwrap();
+		let double = match id {
+			Some(id) => Some((client_name.clone(), id)),
+			None => None,
+		};
+		let url = match id {
+			Some(id) => self.requests.get(&(client_name.clone(), id)),
+			None => None,
+		};
 		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
 			self.output.insert(0, format!("{}", msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<lsp::WindowProgress>() {
@@ -573,6 +581,24 @@ impl Server {
 		} else if let Some(msg) = msg.downcast_ref::<Option<DocumentSymbolResponse>>() {
 			if let Some(msg) = msg {
 				let mut o: Vec<String> = vec![];
+				let mut add_symbol =
+					|container: Option<String>, name: &String, kind: SymbolKind, loc: &Location| {
+						o.push(format!(
+							"{}{} ({:?}): {}",
+							if let Some(c) = container {
+								if c.len() > 0 {
+									format!("{}.", c)
+								} else {
+									"".to_string()
+								}
+							} else {
+								"".to_string()
+							},
+							name,
+							kind,
+							location_to_plumb(loc),
+						));
+					};
 				match msg {
 					DocumentSymbolResponse::Flat(sis) => {
 						for si in sis {
@@ -582,36 +608,19 @@ impl Server {
 							{
 								continue;
 							}
-							o.push(format!(
-								"{}{} ({:?}): {}",
-								if let Some(c) = &si.container_name {
-									if c.len() > 0 {
-										format!("{}.", c)
-									} else {
-										"".to_string()
-									}
-								} else {
-									"".to_string()
-								},
-								si.name,
-								si.kind,
-								location_to_plumb(&si.location),
-							));
+							add_symbol(si.container_name.clone(), &si.name, si.kind, &si.location);
 						}
 					}
 					DocumentSymbolResponse::Nested(dss) => {
+						let url = url.unwrap();
 						// TODO: handle nesting.
 						for ds in dss {
-							o.push(format! {
-								"{}{} ({:?}) :{}",
-								ds.name,
-								match &ds.detail {
-									Some(d) => format!(": {}", d),
-									None => "".to_string(),
-								},
+							add_symbol(
+								None,
+								&ds.name,
 								ds.kind,
-								ds.range.start.line+1,
-							});
+								&Location::new(url.clone(), ds.range),
+							);
 						}
 					}
 				}
@@ -631,11 +640,10 @@ impl Server {
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<CodeLens>>>() {
 			if let Some(msg) = msg {
-				let url = self.requests.get(&(client_name, id.unwrap())).unwrap();
 				let mut o: Vec<String> = vec![];
 				for lens in msg {
 					let loc = Location {
-						uri: url.clone(),
+						uri: url.unwrap().clone(),
 						range: lens.range,
 					};
 					o.push(format!("{}", location_to_plumb(&loc)));
@@ -648,8 +656,7 @@ impl Server {
 			if let Some(msg) = msg {
 				self.actions.clear();
 				for action in msg {
-					self.actions
-						.insert((client_name.clone(), id.unwrap()), action.clone());
+					self.actions.insert(double.clone().unwrap(), action.clone());
 				}
 			}
 		} else {
@@ -664,15 +671,16 @@ impl Server {
 		let client_name = self.files.get(&sw.name).unwrap();
 		let client = self.clients.get_mut(client_name).unwrap();
 		sw.did_change(client)?;
+		let id;
 		match ev.text.as_str() {
 			"definition" => {
-				client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
+				id = client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
 			}
 			"hover" => {
-				client.send::<HoverRequest>(sw.text_doc_pos()?)?;
+				id = client.send::<HoverRequest>(sw.text_doc_pos()?)?;
 			}
 			"complete" => {
-				client.send::<Completion>(CompletionParams {
+				id = client.send::<Completion>(CompletionParams {
 					text_document_position: sw.text_doc_pos()?,
 					work_done_progress_params: WorkDoneProgressParams {
 						work_done_token: None,
@@ -687,7 +695,7 @@ impl Server {
 				})?;
 			}
 			"references" => {
-				client.send::<References>(ReferenceParams {
+				id = client.send::<References>(ReferenceParams {
 					text_document_position: sw.text_doc_pos()?,
 					work_done_progress_params: WorkDoneProgressParams {
 						work_done_token: None,
@@ -698,15 +706,15 @@ impl Server {
 				})?;
 			}
 			"symbols" => {
-				client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
+				id = client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
 					text_document: TextDocumentIdentifier::new(sw.url.clone()),
 				})?;
 			}
 			"signature" => {
-				client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
+				id = client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
 			}
 			"lens" => {
-				let id = client.send::<CodeLensRequest>(CodeLensParams {
+				id = client.send::<CodeLensRequest>(CodeLensParams {
 					text_document: TextDocumentIdentifier::new(sw.url.clone()),
 					work_done_progress_params: WorkDoneProgressParams {
 						work_done_token: None,
@@ -715,11 +723,9 @@ impl Server {
 						partial_result_token: None,
 					},
 				})?;
-				self.requests
-					.insert((client_name.to_string(), id), sw.url.clone());
 			}
 			"assist" => {
-				let id = client.send::<CodeActionRequest>(CodeActionParams {
+				id = client.send::<CodeActionRequest>(CodeActionParams {
 					text_document: TextDocumentIdentifier::new(sw.url.clone()),
 					range: Range {
 						start: sw.position()?,
@@ -736,11 +742,11 @@ impl Server {
 						partial_result_token: None,
 					},
 				})?;
-				self.requests
-					.insert((client_name.to_string(), id), sw.url.clone());
 			}
 			_ => panic!("unexpected text {}", ev.text),
 		};
+		self.requests
+			.insert((client_name.to_string(), id), sw.url.clone());
 		Ok(())
 	}
 	fn run_code_action(&mut self, client_name: String, id: usize) -> Result<()> {
