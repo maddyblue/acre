@@ -581,25 +581,26 @@ impl Server {
 		} else if let Some(msg) = msg.downcast_ref::<Option<DocumentSymbolResponse>>() {
 			if let Some(msg) = msg {
 				let mut o: Vec<String> = vec![];
-				let mut add_symbol =
-					|container: Option<String>, name: &String, kind: SymbolKind, loc: &Location| {
-						o.push(format!(
-							"{}{} ({:?}): {}",
-							if let Some(c) = container {
-								if c.len() > 0 {
-									format!("{}.", c)
-								} else {
-									"".to_string()
-								}
-							} else {
-								"".to_string()
-							},
-							name,
-							kind,
-							location_to_plumb(loc),
-						));
-					};
-				match msg {
+				fn add_symbol(
+					o: &mut Vec<String>,
+					container: &Vec<String>,
+					name: &String,
+					kind: SymbolKind,
+					loc: &Location,
+				) {
+					o.push(format!(
+						"{}{} ({:?}): {}",
+						container
+							.iter()
+							.map(|c| format!("{}::", c))
+							.collect::<Vec<String>>()
+							.join(""),
+						name,
+						kind,
+						location_to_plumb(loc),
+					));
+				};
+				match msg.clone() {
 					DocumentSymbolResponse::Flat(sis) => {
 						for si in sis {
 							// Ignore variables in methods.
@@ -608,20 +609,38 @@ impl Server {
 							{
 								continue;
 							}
-							add_symbol(si.container_name.clone(), &si.name, si.kind, &si.location);
+							let cn = match si.container_name.clone() {
+								Some(c) => vec![c],
+								None => vec![],
+							};
+							add_symbol(&mut o, &cn, &si.name, si.kind, &si.location);
 						}
 					}
-					DocumentSymbolResponse::Nested(dss) => {
+					DocumentSymbolResponse::Nested(mut dss) => {
 						let url = url.unwrap();
-						// TODO: handle nesting.
-						for ds in dss {
-							add_symbol(
-								None,
-								&ds.name,
-								ds.kind,
-								&Location::new(url.clone(), ds.range),
-							);
-						}
+						fn process(
+							url: &Url,
+							mut o: &mut Vec<String>,
+							parents: &Vec<String>,
+							dss: &mut Vec<DocumentSymbol>,
+						) {
+							dss.sort_by(|a, b| a.range.start.line.cmp(&b.range.start.line));
+							for ds in dss {
+								add_symbol(
+									&mut o,
+									parents,
+									&ds.name,
+									ds.kind,
+									&Location::new(url.clone(), ds.range),
+								);
+								if let Some(mut children) = ds.children.clone() {
+									let mut parents = parents.clone();
+									parents.push(ds.name.clone());
+									process(url, o, &parents, &mut children);
+								}
+							}
+						};
+						process(url, &mut o, &vec![], &mut dss);
 					}
 				}
 				if o.len() > 0 {
