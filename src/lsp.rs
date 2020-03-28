@@ -88,7 +88,8 @@ impl Client {
 				Box::new(err)
 			} else if let Some(id) = msg.id {
 				if msg.params.is_some() {
-					println!("unsupported server -> client message");
+					println!("unsupported server -> client message:");
+					println!("{}", std::str::from_utf8(&v).unwrap());
 					continue;
 				}
 				let typ = im.lock().unwrap().remove(&id).unwrap();
