@@ -178,11 +178,6 @@ impl ServerWin {
 		let (line, col) = nl.offset_to_line(pos.0 as u64);
 		Ok(Position::new(line, col))
 	}
-	fn last(&mut self) -> Result<Position> {
-		let nl = self.nl()?;
-		let (line, col) = nl.last();
-		Ok(Position::new(line, col))
-	}
 	fn text(&mut self) -> Result<(i64, String)> {
 		let mut buf = String::new();
 		self.w.read(File::Body)?.read_to_string(&mut buf)?;
@@ -744,11 +739,12 @@ impl Server {
 				})?;
 			}
 			"assist" => {
+				let pos = sw.position()?;
 				id = client.send::<CodeActionRequest>(CodeActionParams {
 					text_document: TextDocumentIdentifier::new(sw.url.clone()),
 					range: Range {
-						start: sw.position()?,
-						end: sw.last()?,
+						start: pos,
+						end: pos,
 					},
 					context: CodeActionContext {
 						diagnostics: vec![],
