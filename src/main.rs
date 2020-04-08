@@ -1,5 +1,6 @@
 use acre::{acme::*, lsp, plumb};
 use crossbeam_channel::{bounded, Receiver, Select};
+use diff;
 use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
 use serde::Deserialize;
@@ -690,12 +691,37 @@ impl Server {
 				let sw = self.ws.get_mut(&wid).unwrap();
 				let mut body = String::new();
 				sw.w.read(File::Body)?.read_to_string(&mut body)?;
+				let offsets = NlOffsets::new(std::io::Cursor::new(body.clone()))?;
 				if msg.len() == 1 {
 					if body == msg[0].new_text {
 						return Ok(());
 					}
+					// Check if this is a full file replacement. If so, use a diff algorithm so acme doesn't scroll to the bottom.
+					let edit = msg[0].clone();
+					let last = offsets.last();
+					if edit.range.start == Position::new(0, 0)
+						&& edit.range.end == Position::new(last.0, last.1)
+					{
+						let lines = diff::lines(&body, &edit.new_text);
+						let mut i = 0;
+						for line in lines.iter() {
+							i += 1;
+							match line {
+								diff::Result::Left(_) => {
+									sw.w.addr(&format!("{},{}", i, i))?;
+									sw.w.write(File::Data, "")?;
+									i -= 1;
+								}
+								diff::Result::Right(s) => {
+									sw.w.addr(&format!("{}+#0", i - 1))?;
+									sw.w.write(File::Data, &format!("{}\n", s))?;
+								}
+								diff::Result::Both(_, _) => {}
+							}
+						}
+						return Ok(());
+					}
 				}
-				let offsets = NlOffsets::new(std::io::Cursor::new(body))?;
 				sw.w.seek(File::Body, std::io::SeekFrom::Start(0))?;
 				sw.w.ctl("nomark")?;
 				sw.w.ctl("mark")?;
