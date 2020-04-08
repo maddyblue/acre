@@ -673,6 +673,45 @@ impl Server {
 					self.actions.insert(double.clone().unwrap(), action.clone());
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<TextEdit>>>() {
+			if let Some(msg) = msg {
+				if msg.is_empty() {
+					return Ok(());
+				}
+				let filename = url.unwrap().path();
+				let mut wid: Option<usize> = None;
+				for (name, id) in &self.names {
+					if filename == name {
+						wid = Some(*id);
+						break;
+					}
+				}
+				let wid = wid.unwrap();
+				let sw = self.ws.get_mut(&wid).unwrap();
+				let mut body = String::new();
+				sw.w.read(File::Body)?.read_to_string(&mut body)?;
+				if msg.len() == 1 {
+					if body == msg[0].new_text {
+						return Ok(());
+					}
+				}
+				let offsets = NlOffsets::new(std::io::Cursor::new(body))?;
+				sw.w.seek(File::Body, std::io::SeekFrom::Start(0))?;
+				sw.w.ctl("nomark")?;
+				sw.w.ctl("mark")?;
+				let mut delta: i64 = 0;
+				for edit in msg.iter().rev() {
+					let soff = offsets
+						.line_to_offset(edit.range.start.line, edit.range.start.character)
+						as i64;
+					let eoff = offsets.line_to_offset(edit.range.end.line, edit.range.end.character)
+						as i64;
+					let addr = format!("#{},#{}", soff + delta, eoff + delta);
+					sw.w.addr(&addr)?;
+					sw.w.write(File::Data, &edit.new_text)?;
+					delta += edit.new_text.len() as i64 - (eoff - soff);
+				}
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -777,10 +816,6 @@ impl Server {
 		}
 		Ok(())
 	}
-	fn apply_edit(&self, _edit: WorkspaceEdit) -> Result<()> {
-		// TODO: implement
-		Ok(())
-	}
 	fn run_cmd(&mut self, ev: Event) -> Result<()> {
 		match ev.c2 {
 			'x' | 'X' => match ev.text.as_str() {
@@ -838,6 +873,24 @@ impl Server {
 		client.notify::<DidSaveTextDocument>(DidSaveTextDocumentParams {
 			text_document: sw.doc.clone(),
 		})?;
+		// TODO: make a common send method so requests is populated the
+		// same here and in run_event.
+		let format_req_id = client.send::<Formatting>(DocumentFormattingParams {
+			text_document: sw.doc.clone(),
+			options: FormattingOptions {
+				tab_size: 4,
+				insert_spaces: false,
+				properties: HashMap::new(),
+				trim_trailing_whitespace: Some(true),
+				insert_final_newline: Some(true),
+				trim_final_newlines: Some(true),
+			},
+			work_done_progress_params: WorkDoneProgressParams {
+				work_done_token: None,
+			},
+		})?;
+		self.requests
+			.insert((sw.client.clone(), format_req_id), sw.url.clone());
 		Ok(())
 	}
 	fn wait(&mut self) -> Result<()> {

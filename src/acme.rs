@@ -234,7 +234,7 @@ impl Win {
 		self.write(File::Ctl, &format!("{}\n", data))
 	}
 	pub fn addr(&mut self, data: &str) -> Result<()> {
-		self.write(File::Addr, &format!("{}\n", data))
+		self.write(File::Addr, &format!("{}", data))
 	}
 	pub fn clear(&mut self) -> Result<()> {
 		self.write(File::Addr, &format!(","))?;
@@ -264,6 +264,13 @@ impl Win {
 		let f = self.fid(file);
 		f.seek(SeekFrom::Start(0))?;
 		Ok(f)
+	}
+	pub fn seek(&mut self, file: File, pos: SeekFrom) -> Result<u64> {
+		let f = self.fid(file);
+		match f.seek(pos) {
+			Ok(v) => Ok(v),
+			Err(err) => Err(Box::new(err)),
+		}
 	}
 }
 
@@ -342,6 +349,19 @@ impl NlOffsets {
 			return (i as u64, offset - self.nl[i]);
 		}
 		panic!("unreachable");
+	}
+	pub fn line_to_offset(&self, line: u64, col: u64) -> u64 {
+		let line = line as usize;
+		let eof = self.nl[self.nl.len() - 1] + self.leftover;
+		if line > self.nl.len() {
+			// beyond EOF, so just return the highest offset.
+			return eof;
+		}
+		let mut o = self.nl[line] + col;
+		if o > eof {
+			o = eof;
+		}
+		o
 	}
 	// returns the position of the last character in the file.
 	pub fn last(&self) -> (u64, u64) {
