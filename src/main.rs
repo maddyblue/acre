@@ -901,22 +901,25 @@ impl Server {
 		})?;
 		// TODO: make a common send method so requests is populated the
 		// same here and in run_event.
-		let format_req_id = client.send::<Formatting>(DocumentFormattingParams {
-			text_document: sw.doc.clone(),
-			options: FormattingOptions {
-				tab_size: 4,
-				insert_spaces: false,
-				properties: HashMap::new(),
-				trim_trailing_whitespace: Some(true),
-				insert_final_newline: Some(true),
-				trim_final_newlines: Some(true),
-			},
-			work_done_progress_params: WorkDoneProgressParams {
-				work_done_token: None,
-			},
-		})?;
-		self.requests
-			.insert((sw.client.clone(), format_req_id), sw.url.clone());
+		let capabilities = self.capabilities.get(&sw.client).unwrap();
+		if capabilities.document_formatting_provider.unwrap_or(false) {
+			let format_req_id = client.send::<Formatting>(DocumentFormattingParams {
+				text_document: sw.doc.clone(),
+				options: FormattingOptions {
+					tab_size: 4,
+					insert_spaces: false,
+					properties: HashMap::new(),
+					trim_trailing_whitespace: Some(true),
+					insert_final_newline: Some(true),
+					trim_final_newlines: Some(true),
+				},
+				work_done_progress_params: WorkDoneProgressParams {
+					work_done_token: None,
+				},
+			})?;
+			self.requests
+				.insert((sw.client.clone(), format_req_id), sw.url.clone());
+		}
 		Ok(())
 	}
 	fn wait(&mut self) -> Result<()> {
