@@ -140,7 +140,6 @@ struct ServerWin {
 	w: Win,
 	doc: TextDocumentIdentifier,
 	url: Url,
-	lang_id: String,
 	version: i64,
 	client: String,
 }
@@ -149,18 +148,11 @@ impl ServerWin {
 	fn new(name: String, w: Win, client: String) -> Result<ServerWin> {
 		let url = Url::parse(&format!("file://{}", name))?;
 		let doc = TextDocumentIdentifier::new(url.clone());
-		let lang_id = match name.rsplit(".").next().unwrap_or("") {
-			"go" => "go",
-			"rs" => "rust",
-			_ => panic!("unknown file extension {}", name),
-		}
-		.to_string();
 		Ok(ServerWin {
 			name,
 			w,
 			doc,
 			url,
-			lang_id,
 			version: 1,
 			client,
 		})
@@ -418,7 +410,7 @@ impl Server {
 					client.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
 						text_document: TextDocumentItem::new(
 							sw.url.clone(),
-							sw.lang_id.clone(),
+							"".to_string(), // lang id
 							version,
 							text,
 						),
