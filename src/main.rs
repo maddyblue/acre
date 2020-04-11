@@ -341,6 +341,9 @@ impl Server {
 			if caps.signature_help_provider.is_some() {
 				body.push_str("[signature] ");
 			}
+			if caps.type_definition_provider.is_some() {
+				body.push_str("[typedef] ");
+			}
 			body.push('\n');
 		}
 		self.addr.push((body.len(), 0));
@@ -731,6 +734,10 @@ impl Server {
 			if let Some(msg) = msg {
 				goto_definition(msg)?;
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<GotoTypeDefinitionResponse>>() {
+			if let Some(msg) = msg {
+				goto_definition(msg)?;
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -818,6 +825,9 @@ impl Server {
 			}
 			"impl" => {
 				id = client.send::<GotoImplementation>(sw.text_doc_pos()?)?;
+			}
+			"typedef" => {
+				id = client.send::<GotoTypeDefinition>(sw.text_doc_pos()?)?;
 			}
 			_ => panic!("unexpected text {}", ev.text),
 		};
