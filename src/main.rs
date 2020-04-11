@@ -22,7 +22,7 @@ struct TomlConfig {
 struct ConfigServer {
 	name: String,
 	executable: Option<String>,
-	extension: String,
+	files: String,
 	root_uri: Option<String>,
 	workspace_folders: Option<Vec<String>>,
 }
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
 	for server in config.servers {
 		clients.push(lsp::Client::new(
 			server.name.clone(),
-			server.extension,
+			server.files,
 			server.executable.unwrap_or(server.name),
 			std::iter::empty(),
 			server.root_uri,
@@ -393,7 +393,7 @@ impl Server {
 		for wi in wins {
 			let mut client = None;
 			for (_, c) in self.clients.iter_mut() {
-				if wi.name.ends_with(&c.files) {
+				if c.files.is_match(&wi.name) {
 					// Don't open windows for a client that hasn't initialized yet.
 					if !self.capabilities.contains_key(&c.name) {
 						continue;

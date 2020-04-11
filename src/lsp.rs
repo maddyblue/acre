@@ -1,6 +1,7 @@
 use crate::Result;
 use crossbeam_channel::{unbounded, Receiver};
 use lsp_types::{notification, request::*, *};
+use regex;
 use serde_json;
 use std::any::Any;
 use std::collections::HashMap;
@@ -13,7 +14,7 @@ use std::thread;
 pub struct Client {
 	pub name: String,
 	proc: Child,
-	pub files: String,
+	pub files: regex::Regex,
 	stdin: ChildStdin,
 	next_id: usize,
 	id_map: Arc<Mutex<HashMap<usize, String>>>,
@@ -45,7 +46,7 @@ impl Client {
 		let (msg_s, msg_r) = unbounded();
 		let mut c = Client {
 			name,
-			files,
+			files: regex::Regex::new(&files)?,
 			proc,
 			stdin,
 			next_id: 1,
