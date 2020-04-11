@@ -2,7 +2,7 @@
 
 acre is a [langserver](https://langserver.org/) client for [acme](https://www.youtube.com/watch?v=dP1xVpMPn8M) in [Rust](https://www.rust-lang.org/).
 
-This is very much in **beta** and purposefully crashes on most errors. Code actions, lenses, and some other features are not yet supported.
+This is very much in **beta** and purposefully crashes on most errors. If a crash occurs, please file a bug so the feature can be added. Code actions, lenses, and some other features are not yet supported.
 
 It functions by creating a new window in acre. The window lists all open supported files and commands. The commands can be run by right clicking on them. The currently focused window is prefixed by a `*`. Run the `Get` command in the acre window to clear the current output.
 
