@@ -2,7 +2,7 @@
 
 acre is a [langserver](https://langserver.org/) client for [acme](https://www.youtube.com/watch?v=dP1xVpMPn8M) in [Rust](https://www.rust-lang.org/).
 
-This is very much in **beta** and purposefully crashes on most errors. If a crash occurs, please file a bug so the feature can be added. Code actions, lenses, and some other features are not yet supported.
+This is very much in **beta** and purposefully crashes on most errors. If a crash occurs, please file a bug so the feature can be added. Code actions, lenses, and some other features are not yet supported. Config files may change.
 
 It functions by creating a new window in acre. The window lists all open supported files and commands. The commands can be run by right clicking on them. The currently focused window is prefixed by a `*`. Run the `Get` command in the acre window to clear the current output.
 
@@ -14,13 +14,22 @@ The [latest release](https://github.com/mjibson/acre/releases/latest) is availab
 
 # Configuration
 
-Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX). Here's an example file for `rust-analyzer`:
+Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX). The file should contain an array of `servers` objects with the fields:
+
+- `name`: the name of the server.
+- `executable` (optional): the name of the binary to invoke. If not present, uses `name`.
+- `files`: regex matching files that should be associated with this server.
+- `root_uri`: (optional): Root URI of the workspace.
+- `workspace_folders` (optional): array of workspace folder URIs.
+
+URIs should look something like `file:///home/user/project`.
+
+Here's an example file for `rust-analyzer`:
 
 ```
 [[servers]]
-name = "rls"
-executable = "rust-analyzer-linux"
-extension = ".rs"
+name = "rust-analyzer"
+files = "\\.rs$"
 workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
