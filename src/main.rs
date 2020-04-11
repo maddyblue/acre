@@ -308,8 +308,11 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
-			if caps.code_action_provider.is_some() {
-				body.push_str("[assist] ");
+			#[cfg(debug_assertions)]
+			{
+				if caps.code_action_provider.is_some() {
+					body.push_str("[assist] ");
+				}
 			}
 			if caps.completion_provider.is_some() {
 				body.push_str("[complete] ");
@@ -320,8 +323,11 @@ impl Server {
 			if caps.hover_provider.unwrap_or(false) {
 				body.push_str("[hover] ");
 			}
-			if caps.code_lens_provider.is_some() {
-				body.push_str("[lens] ");
+			#[cfg(debug_assertions)]
+			{
+				if caps.code_lens_provider.is_some() {
+					body.push_str("[lens] ");
+				}
 			}
 			if caps.references_provider.unwrap_or(false) {
 				body.push_str("[references] ");
