@@ -129,6 +129,10 @@ impl Client {
 					Formatting::METHOD => {
 						Box::new(serde_json::from_str::<Option<Vec<TextEdit>>>(res.get()).unwrap())
 					}
+					GotoImplementation::METHOD => Box::new(
+						serde_json::from_str::<Option<GotoImplementationResponse>>(res.get())
+							.unwrap(),
+					),
 					_ => panic!("unrecognized type: {}", typ),
 				}
 			} else if let Some(method) = msg.method {

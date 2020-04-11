@@ -323,6 +323,9 @@ impl Server {
 			if caps.hover_provider.unwrap_or(false) {
 				body.push_str("[hover] ");
 			}
+			if caps.implementation_provider.is_some() {
+				body.push_str("[impl] ");
+			}
 			#[cfg(debug_assertions)]
 			{
 				if caps.code_lens_provider.is_some() {
@@ -509,19 +512,7 @@ impl Server {
 			self.sync_windows()?;
 		} else if let Some(msg) = msg.downcast_ref::<Option<GotoDefinitionResponse>>() {
 			if let Some(msg) = msg {
-				match msg {
-					GotoDefinitionResponse::Array(locs) => match locs.len() {
-						0 => {}
-						1 => {
-							let plumb = location_to_plumb(&locs[0]);
-							plumb_location(plumb)?;
-						}
-						_ => {
-							panic!("unknown definition response: {:?}", msg);
-						}
-					},
-					_ => panic!("unknown definition response: {:?}", msg),
-				};
+				goto_definition(msg)?;
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<Hover>>() {
 			if let Some(msg) = msg {
@@ -736,6 +727,10 @@ impl Server {
 					delta += edit.new_text.len() as i64 - (eoff - soff);
 				}
 			}
+		} else if let Some(msg) = msg.downcast_ref::<Option<GotoImplementationResponse>>() {
+			if let Some(msg) = msg {
+				goto_definition(msg)?;
+			}
 		} else {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
@@ -820,6 +815,9 @@ impl Server {
 						partial_result_token: None,
 					},
 				})?;
+			}
+			"impl" => {
+				id = client.send::<GotoImplementation>(sw.text_doc_pos()?)?;
 			}
 			_ => panic!("unexpected text {}", ev.text),
 		};
@@ -1004,6 +1002,23 @@ impl Drop for Server {
 	fn drop(&mut self) {
 		let _ = self.w.del(true);
 	}
+}
+
+fn goto_definition(goto: &GotoDefinitionResponse) -> Result<()> {
+	match goto {
+		GotoDefinitionResponse::Array(locs) => match locs.len() {
+			0 => {}
+			1 => {
+				let plumb = location_to_plumb(&locs[0]);
+				plumb_location(plumb)?;
+			}
+			_ => {
+				panic!("unknown definition response: {:?}", goto);
+			}
+		},
+		_ => panic!("unknown definition response: {:?}", goto),
+	};
+	Ok(())
 }
 
 fn location_to_plumb(l: &Location) -> String {
