@@ -957,7 +957,7 @@ impl Server {
 				{
 					let mut cid: Option<(ClientId, usize)> = None;
 					for (pos, (client_id, idx)) in self.action_addrs.iter().rev() {
-						if (*pos as u32) < ev.q0 {
+						if (*pos as u32) < ev.q0 && client_id.msg_id != 0 {
 							cid = Some((client_id.clone(), *idx));
 							break;
 						}
