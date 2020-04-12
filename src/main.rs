@@ -1,8 +1,10 @@
-use acre::{acme::*, lsp, plumb};
+use acre::{acme::*, err_str, lsp, plumb};
 use crossbeam_channel::{bounded, Receiver, Select};
 use diff;
+use lazy_static::lazy_static;
 use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
+use regex::Regex;
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::HashMap;
@@ -102,6 +104,27 @@ impl std::fmt::Display for Progress {
 	}
 }
 
+#[derive(Debug, Clone)]
+enum Action {
+	Command(CodeActionOrCommand),
+	Completion(CompletionItem),
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+struct ClientId {
+	client_name: String,
+	msg_id: usize,
+}
+
+impl ClientId {
+	fn new<S: Into<String>>(client_name: S, msg_id: usize) -> Self {
+		ClientId {
+			client_name: client_name.into(),
+			msg_id,
+		}
+	}
+}
+
 struct Server {
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
@@ -117,11 +140,10 @@ struct Server {
 	// file name -> list of diagnostics
 	diags: HashMap<String, Vec<String>>,
 	// request (client_name, id) -> file Url
-	requests: HashMap<(String, usize), Url>,
-	// (client_name, id) -> CA
-	actions: HashMap<(String, usize), CodeActionOrCommand>,
-	// Vec of position and (client_name, id) in the actions map.
-	action_addrs: Vec<(usize, (String, usize))>,
+	requests: HashMap<ClientId, Url>,
+	actions: HashMap<ClientId, Vec<Action>>,
+	// Vec of position and (ClientId, index) into the vec of actions.
+	action_addrs: Vec<(usize, (ClientId, usize))>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -284,6 +306,25 @@ impl Server {
 			.unwrap();
 		Ok(s)
 	}
+	fn get_sw_by_url(&mut self, url: &Url) -> Result<&mut ServerWin> {
+		let filename = url.path();
+		let mut wid: Option<usize> = None;
+		for (name, id) in &self.names {
+			if filename == name {
+				wid = Some(*id);
+				break;
+			}
+		}
+		let wid = match wid {
+			Some(id) => id,
+			None => return Err(err_str(format!("could not find file {}", filename))),
+		};
+		let sw = match self.ws.get_mut(&wid) {
+			Some(sw) => sw,
+			None => return Err(err_str(format!("could not find window {}", wid))),
+		};
+		Ok(sw)
+	}
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
 		for (_, ds) in &self.diags {
@@ -353,19 +394,35 @@ impl Server {
 			self.output.drain(MAX_LEN..);
 		}
 		self.action_addrs.clear();
-		for ((client_name, id), msg) in &self.actions {
-			self.action_addrs
-				.push((body.len(), (client_name.to_string(), *id)));
-			match msg {
-				CodeActionOrCommand::Command(cmd) => {
-					write!(&mut body, "\n[{}]\n", cmd.title)?;
-				}
-				CodeActionOrCommand::CodeAction(action) => {
-					write!(&mut body, "\n[{}]\n", action.title)?;
+		for (client_id, actions) in &self.actions {
+			for (idx, action) in actions.iter().enumerate() {
+				self.action_addrs
+					.push((body.len(), (client_id.clone(), idx)));
+				match action {
+					Action::Command(CodeActionOrCommand::Command(cmd)) => {
+						write!(&mut body, "\n[{}]", cmd.title)?;
+					}
+					Action::Command(CodeActionOrCommand::CodeAction(action)) => {
+						write!(&mut body, "\n[{}]", action.title)?;
+					}
+					Action::Completion(item) => {
+						write!(&mut body, "\n[insert] {}:", item.label)?;
+						if item.deprecated.unwrap_or(false) {
+							write!(&mut body, " DEPRECATED")?;
+						}
+						if let Some(k) = item.kind {
+							write!(&mut body, " ({:?})", k)?;
+						}
+						if let Some(d) = &item.detail {
+							write!(&mut body, " {}", d)?;
+						}
+					}
 				}
 			}
+			write!(&mut body, "\n")?;
 		}
-		self.action_addrs.push((body.len(), ("".to_string(), 0)));
+		self.action_addrs
+			.push((body.len(), (ClientId::new("", 0), 100000)));
 		for s in &self.output {
 			write!(&mut body, "\n{}\n", s)?;
 		}
@@ -443,14 +500,22 @@ impl Server {
 		self.ws = ws;
 		Ok(())
 	}
-	fn lsp_msg(&mut self, client_name: String, id: Option<usize>, msg: Box<dyn Any>) -> Result<()> {
+	fn lsp_msg(
+		&mut self,
+		client_name: String,
+		msg_id: Option<usize>,
+		msg: Box<dyn Any>,
+	) -> Result<()> {
 		let client = &self.clients.get(&client_name).unwrap();
-		let double = match id {
-			Some(id) => Some((client_name.clone(), id)),
+		let client_id = match msg_id {
+			Some(id) => Some(ClientId::new(client_name.clone(), id)),
 			None => None,
 		};
-		let url = match id {
-			Some(id) => self.requests.get(&(client_name.clone(), id)),
+		let url = match client_id {
+			Some(ref client_id) => match self.requests.get(client_id) {
+				Some(url) => Some(url.clone()),
+				None => None,
+			},
 			None => None,
 		};
 		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
@@ -538,26 +603,17 @@ impl Server {
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<CompletionResponse>>() {
 			if let Some(msg) = msg {
-				let mut o: Vec<String> = vec![];
-				match msg {
-					CompletionResponse::Array(cis) => {
-						for ci in cis {
-							let mut s = ci.label.clone();
-							if let Some(k) = ci.kind {
-								write!(&mut s, " ({:?})", k)?;
-							}
-							if let Some(d) = &ci.detail {
-								write!(&mut s, ": {}", d)?;
-							}
-							o.push(s);
-						}
-					}
-					_ => panic!("unknown completion response: {:?}", msg),
+				self.actions.clear();
+				let actions = match msg {
+					CompletionResponse::Array(cis) => cis,
+					CompletionResponse::List(cls) => &cls.items,
+				};
+				let mut v = vec![];
+				for a in actions.iter().cloned() {
+					v.push(Action::Completion(a));
 				}
-				if o.len() > 0 {
-					let n = std::cmp::min(o.len(), 20);
-					self.output.insert(0, o[0..n].join("\n"));
-				}
+				v.truncate(10);
+				self.actions.insert(client_id.unwrap(), v);
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<Location>>>() {
 			if let Some(msg) = msg {
@@ -605,7 +661,6 @@ impl Server {
 						}
 					}
 					DocumentSymbolResponse::Nested(mut dss) => {
-						let url = url.unwrap();
 						fn process(
 							url: &Url,
 							mut o: &mut Vec<String>,
@@ -628,7 +683,7 @@ impl Server {
 								}
 							}
 						};
-						process(url, &mut o, &vec![], &mut dss);
+						process(&url.unwrap(), &mut o, &vec![], &mut dss);
 					}
 				}
 				if o.len() > 0 {
@@ -648,9 +703,10 @@ impl Server {
 		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<CodeLens>>>() {
 			if let Some(msg) = msg {
 				let mut o: Vec<String> = vec![];
+				let url = url.unwrap();
 				for lens in msg {
 					let loc = Location {
-						uri: url.unwrap().clone(),
+						uri: url.clone(),
 						range: lens.range,
 					};
 					o.push(format!("{}", location_to_plumb(&loc)));
@@ -662,73 +718,15 @@ impl Server {
 		} else if let Some(msg) = msg.downcast_ref::<Option<CodeActionResponse>>() {
 			if let Some(msg) = msg {
 				self.actions.clear();
-				for action in msg {
-					self.actions.insert(double.clone().unwrap(), action.clone());
+				let mut v = vec![];
+				for m in msg.iter().cloned() {
+					v.push(Action::Command(m));
 				}
+				self.actions.insert(client_id.clone().unwrap(), v);
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<TextEdit>>>() {
 			if let Some(msg) = msg {
-				if msg.is_empty() {
-					return Ok(());
-				}
-				let filename = url.unwrap().path();
-				let mut wid: Option<usize> = None;
-				for (name, id) in &self.names {
-					if filename == name {
-						wid = Some(*id);
-						break;
-					}
-				}
-				let wid = wid.unwrap();
-				let sw = self.ws.get_mut(&wid).unwrap();
-				let mut body = String::new();
-				sw.w.read(File::Body)?.read_to_string(&mut body)?;
-				let offsets = NlOffsets::new(std::io::Cursor::new(body.clone()))?;
-				if msg.len() == 1 {
-					if body == msg[0].new_text {
-						return Ok(());
-					}
-					// Check if this is a full file replacement. If so, use a diff algorithm so acme doesn't scroll to the bottom.
-					let edit = msg[0].clone();
-					let last = offsets.last();
-					if edit.range.start == Position::new(0, 0)
-						&& edit.range.end == Position::new(last.0, last.1)
-					{
-						let lines = diff::lines(&body, &edit.new_text);
-						let mut i = 0;
-						for line in lines.iter() {
-							i += 1;
-							match line {
-								diff::Result::Left(_) => {
-									sw.w.addr(&format!("{},{}", i, i))?;
-									sw.w.write(File::Data, "")?;
-									i -= 1;
-								}
-								diff::Result::Right(s) => {
-									sw.w.addr(&format!("{}+#0", i - 1))?;
-									sw.w.write(File::Data, &format!("{}\n", s))?;
-								}
-								diff::Result::Both(_, _) => {}
-							}
-						}
-						return Ok(());
-					}
-				}
-				sw.w.seek(File::Body, std::io::SeekFrom::Start(0))?;
-				sw.w.ctl("nomark")?;
-				sw.w.ctl("mark")?;
-				let mut delta: i64 = 0;
-				for edit in msg.iter().rev() {
-					let soff = offsets
-						.line_to_offset(edit.range.start.line, edit.range.start.character)
-						as i64;
-					let eoff = offsets.line_to_offset(edit.range.end.line, edit.range.end.character)
-						as i64;
-					let addr = format!("#{},#{}", soff + delta, eoff + delta);
-					sw.w.addr(&addr)?;
-					sw.w.write(File::Data, &edit.new_text)?;
-					delta += edit.new_text.len() as i64 - (eoff - soff);
-				}
+				self.apply_text_edits(&url.unwrap(), InsertTextFormat::PlainText, msg)?;
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<GotoImplementationResponse>>() {
 			if let Some(msg) = msg {
@@ -742,6 +740,78 @@ impl Server {
 			// TODO: how do we get the underlying struct here so we
 			// know which message we are missing?
 			panic!("unrecognized msg: {:?}", msg);
+		}
+		Ok(())
+	}
+	fn apply_text_edits(
+		&mut self,
+		url: &Url,
+		format: InsertTextFormat,
+		edits: &Vec<TextEdit>,
+	) -> Result<()> {
+		if edits.is_empty() {
+			return Ok(());
+		}
+		let sw = self.get_sw_by_url(url)?;
+		let mut body = String::new();
+		sw.w.read(File::Body)?.read_to_string(&mut body)?;
+		let offsets = NlOffsets::new(std::io::Cursor::new(body.clone()))?;
+		if edits.len() == 1 {
+			if body == edits[0].new_text {
+				return Ok(());
+			}
+			// Check if this is a full file replacement. If so, use a diff algorithm so acme doesn't scroll to the bottom.
+			let edit = edits[0].clone();
+			let last = offsets.last();
+			if edit.range.start == Position::new(0, 0)
+				&& edit.range.end == Position::new(last.0, last.1)
+			{
+				let lines = diff::lines(&body, &edit.new_text);
+				let mut i = 0;
+				for line in lines.iter() {
+					i += 1;
+					match line {
+						diff::Result::Left(_) => {
+							sw.w.addr(&format!("{},{}", i, i))?;
+							sw.w.write(File::Data, "")?;
+							i -= 1;
+						}
+						diff::Result::Right(s) => {
+							sw.w.addr(&format!("{}+#0", i - 1))?;
+							sw.w.write(File::Data, &format!("{}\n", s))?;
+						}
+						diff::Result::Both(_, _) => {}
+					}
+				}
+				return Ok(());
+			}
+		}
+		sw.w.seek(File::Body, std::io::SeekFrom::Start(0))?;
+		sw.w.ctl("nomark")?;
+		sw.w.ctl("mark")?;
+		let mut delta: i64 = 0;
+		for edit in edits.iter().rev() {
+			let soff =
+				offsets.line_to_offset(edit.range.start.line, edit.range.start.character) as i64;
+			let eoff = offsets.line_to_offset(edit.range.end.line, edit.range.end.character) as i64;
+			let addr = format!("#{},#{}", soff + delta, eoff + delta);
+			sw.w.addr(&addr)?;
+			let n = match format {
+				InsertTextFormat::Snippet => {
+					lazy_static! {
+						static ref SNIPPET: Regex =
+							Regex::new(r"(\$\{\d+:[[:alpha:]]+\})|(\$0)").unwrap();
+					}
+					let text = &SNIPPET.replace_all(&edit.new_text, "");
+					sw.w.write(File::Data, text)?;
+					text.len()
+				}
+				InsertTextFormat::PlainText => {
+					sw.w.write(File::Data, &edit.new_text)?;
+					edit.new_text.len()
+				}
+			} as i64;
+			delta += n - (eoff - soff);
 		}
 		Ok(())
 	}
@@ -832,18 +902,28 @@ impl Server {
 			_ => panic!("unexpected text {}", ev.text),
 		};
 		self.requests
-			.insert((client_name.to_string(), id), sw.url.clone());
+			.insert(ClientId::new(client_name, id), sw.url.clone());
 		Ok(())
 	}
-	fn run_code_action(&mut self, client_name: String, id: usize) -> Result<()> {
-		let action = self.actions.get(&(client_name, id)).unwrap();
-		println!("run action {:?}", action);
+	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
+		let url = self.requests.get(&client_id).unwrap().clone();
+		let action = &self.actions.get(&client_id).unwrap()[idx].clone();
+		self.actions.clear();
 		match action {
-			CodeActionOrCommand::Command(_cmd) => panic!("unsupported"),
-			CodeActionOrCommand::CodeAction(action) => {
+			Action::Command(CodeActionOrCommand::Command(_cmd)) => panic!("unsupported"),
+			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
 				if let Some(edit) = action.edit.clone() {
 					println!("edit: {:?}", edit);
 				}
+			}
+			Action::Completion(item) => {
+				let format = item
+					.insert_text_format
+					.unwrap_or(InsertTextFormat::PlainText);
+				if let Some(edit) = item.text_edit.clone() {
+					return self.apply_text_edits(&url, format, &vec![edit]);
+				}
+				panic!("unsupported");
 			}
 		}
 		Ok(())
@@ -874,17 +954,15 @@ impl Server {
 					}
 				}
 				{
-					let mut name: String = "".to_string();
-					let mut rid = 0;
-					for (pos, (client_name, id)) in self.action_addrs.iter().rev() {
+					let mut cid: Option<(ClientId, usize)> = None;
+					for (pos, (client_id, idx)) in self.action_addrs.iter().rev() {
 						if (*pos as u32) < ev.q0 {
-							name = client_name.clone();
-							rid = *id;
+							cid = Some((client_id.clone(), *idx));
 							break;
 						}
 					}
-					if rid != 0 {
-						return self.run_code_action(name, rid);
+					if let Some((cid, idx)) = cid {
+						return self.run_code_action(cid, idx);
 					}
 				}
 				return plumb_location(ev.text);
@@ -923,8 +1001,10 @@ impl Server {
 					work_done_token: None,
 				},
 			})?;
-			self.requests
-				.insert((sw.client.clone(), format_req_id), sw.url.clone());
+			self.requests.insert(
+				ClientId::new(sw.client.clone(), format_req_id),
+				sw.url.clone(),
+			);
 		}
 		Ok(())
 	}
