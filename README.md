@@ -18,7 +18,7 @@ The [latest release](https://github.com/mjibson/acre/releases/latest) is availab
 
 # Configuration
 
-Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX). The file should contain an array of `servers` objects with the fields:
+Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX, but the location will be printed in an error if it does not exist). The file should contain an array of `servers` objects with the fields:
 
 - `name`: the name of the server.
 - `executable` (optional): the name of the binary to invoke. If not present, uses `name`.

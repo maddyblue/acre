@@ -36,10 +36,9 @@ fn main() -> Result<()> {
 	let config = match dir.find_config_file(ACRE_TOML) {
 		Some(c) => c,
 		None => {
-			println!(
-				"could not find {} in config location (maybe ~/.config/acre.toml)",
-				ACRE_TOML,
-			);
+			let mut path = dir.get_config_home();
+			path.push(ACRE_TOML);
+			eprintln!("could not find {}", path.to_str().unwrap());
 			std::process::exit(1);
 		}
 	};
