@@ -8,6 +8,10 @@ It functions by creating a new window in acre. The window lists all open support
 
 Note: while the open file list contains all supported file types, those files may or may not be supported by the server if, say, the project they are in has not been configured in acre.toml.
 
+# Demo
+
+![demo](https://user-images.githubusercontent.com/41181/79060552-a28ca200-7c43-11ea-980d-d80458dfb91b.gif)
+
 # Installation
 
 The [latest release](https://github.com/mjibson/acre/releases/latest) is available for Linux and OSX.
