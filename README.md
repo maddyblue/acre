@@ -10,7 +10,7 @@ Note: while the open file list contains all supported file types, those files ma
 
 # Demo
 
-![demo](https://user-images.githubusercontent.com/41181/79060552-a28ca200-7c43-11ea-980d-d80458dfb91b.gif)
+![demo](https://user-images.githubusercontent.com/41181/79060721-afaa9080-7c45-11ea-92be-12846b108cf7.gif)
 
 # Installation
 
