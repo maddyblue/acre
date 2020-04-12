@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fs::metadata;
 use std::io::Read;
 use std::thread;
 
@@ -1116,6 +1117,11 @@ fn location_to_plumb(l: &Location) -> String {
 }
 
 fn plumb_location(loc: String) -> Result<()> {
+	let path = loc.split(":").next().unwrap();
+	// Verify path exists. If not, do nothing.
+	if metadata(path).is_err() {
+		return Ok(());
+	}
 	let f = plumb::open("send", OpenMode::WRITE)?;
 	let msg = plumb::Message {
 		dst: "edit".to_string(),
