@@ -353,7 +353,7 @@ impl NlOffsets {
 	pub fn line_to_offset(&self, line: u64, col: u64) -> u64 {
 		let line = line as usize;
 		let eof = self.nl[self.nl.len() - 1] + self.leftover;
-		if line > self.nl.len() {
+		if line >= self.nl.len() {
 			// beyond EOF, so just return the highest offset.
 			return eof;
 		}
