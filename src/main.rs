@@ -1098,12 +1098,9 @@ fn goto_definition(goto: &GotoDefinitionResponse) -> Result<()> {
 	match goto {
 		GotoDefinitionResponse::Array(locs) => match locs.len() {
 			0 => {}
-			1 => {
+			_ => {
 				let plumb = location_to_plumb(&locs[0]);
 				plumb_location(plumb)?;
-			}
-			_ => {
-				panic!("unknown definition response: {:?}", goto);
 			}
 		},
 		_ => panic!("unknown definition response: {:?}", goto),
