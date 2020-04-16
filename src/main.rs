@@ -899,7 +899,7 @@ impl Server {
 			"typedef" => {
 				id = client.send::<GotoTypeDefinition>(sw.text_doc_pos()?)?;
 			}
-			_ => panic!("unexpected text {}", ev.text),
+			_ => return Ok(()),
 		};
 		self.requests
 			.insert(ClientId::new(client_name, id), sw.url.clone());
