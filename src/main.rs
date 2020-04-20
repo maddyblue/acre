@@ -572,6 +572,9 @@ impl Server {
 		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ShowMessageParams>() {
 			self.output
 				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
+		} else if let Some(msg) = msg.downcast_ref::<lsp_types::LogMessageParams>() {
+			self.output
+				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
 			let client = self.clients.get_mut(&client_name).unwrap();
 			client.notify::<Initialized>(InitializedParams {})?;

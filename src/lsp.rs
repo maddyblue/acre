@@ -145,6 +145,10 @@ impl Client {
 					"window/progress" => Box::new(
 						serde_json::from_str::<WindowProgress>(msg.params.unwrap().get()).unwrap(),
 					),
+					"window/logMessage" => Box::new(
+						serde_json::from_str::<LogMessageParams>(msg.params.unwrap().get())
+							.unwrap(),
+					),
 					"textDocument/publishDiagnostics" => Box::new(
 						serde_json::from_str::<lsp_types::PublishDiagnosticsParams>(
 							msg.params.unwrap().get(),
