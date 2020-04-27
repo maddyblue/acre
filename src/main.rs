@@ -938,6 +938,7 @@ impl Server {
 					self.actions.clear();
 					self.output.clear();
 					self.sync_windows()?;
+					self.diags.clear();
 				}
 				_ => {
 					panic!("unexpected");
