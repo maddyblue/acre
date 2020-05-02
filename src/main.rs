@@ -19,17 +19,18 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Deserialize)]
 struct TomlConfig {
-	servers: Vec<ConfigServer>,
+	servers: HashMap<String, ConfigServer>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ConfigServer {
-	name: String,
 	executable: Option<String>,
 	files: String,
 	root_uri: Option<String>,
 	workspace_folders: Option<Vec<String>>,
 	options: Option<Value>,
+	actions_on_put: Option<Vec<String>>,
+	format_on_put: Option<bool>,
 }
 
 fn main() -> Result<()> {
@@ -46,24 +47,11 @@ fn main() -> Result<()> {
 	};
 	let config = std::fs::read_to_string(config)?;
 	let config: TomlConfig = toml::from_str(&config)?;
-
-	let mut clients = vec![];
-	for server in config.servers {
-		clients.push(lsp::Client::new(
-			server.name.clone(),
-			server.files,
-			server.executable.unwrap_or(server.name),
-			std::iter::empty(),
-			server.root_uri,
-			server.workspace_folders,
-			server.options,
-		)?);
-	}
-	if clients.is_empty() {
+	if config.servers.is_empty() {
 		println!("empty servers in configuration file");
 		std::process::exit(1);
 	}
-	let mut s = Server::new(clients)?;
+	let mut s = Server::new(config)?;
 	s.wait()
 }
 
@@ -129,6 +117,7 @@ impl ClientId {
 }
 
 struct Server {
+	config: TomlConfig,
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
 	// Sorted Vec of (filenames, win id) to know which order to print windows in.
@@ -158,6 +147,8 @@ struct Server {
 	capabilities: HashMap<String, lsp_types::ServerCapabilities>,
 	// file name -> client name
 	files: HashMap<String, String>,
+	// list of LSP message IDs to auto-run actions
+	autorun: HashMap<usize, ()>,
 }
 
 struct ServerWin {
@@ -223,7 +214,20 @@ impl ServerWin {
 }
 
 impl Server {
-	fn new(clients: Vec<lsp::Client>) -> Result<Server> {
+	fn new(config: TomlConfig) -> Result<Server> {
+		let mut clients = vec![];
+		for (name, server) in config.servers.clone() {
+			clients.push(lsp::Client::new(
+				name.clone(),
+				server.files,
+				server.executable.unwrap_or(name),
+				std::iter::empty(),
+				server.root_uri,
+				server.workspace_folders,
+				server.options,
+			)?);
+		}
+
 		let (log_s, log_r) = bounded(0);
 		let (ev_s, ev_r) = bounded(0);
 		let (err_s, err_r) = bounded(0);
@@ -254,6 +258,8 @@ impl Server {
 			clients: cls,
 			capabilities: HashMap::new(),
 			files: HashMap::new(),
+			config,
+			autorun: HashMap::new(),
 		};
 		let err_s1 = err_s.clone();
 		thread::Builder::new()
@@ -506,7 +512,7 @@ impl Server {
 		msg_id: Option<usize>,
 		msg: Box<dyn Any>,
 	) -> Result<()> {
-		let client = &self.clients.get(&client_name).unwrap();
+		//let client = self.clients.get_mut(&client_name).unwrap();
 		let client_id = match msg_id {
 			Some(id) => Some(ClientId::new(client_name.clone(), id)),
 			None => None,
@@ -521,7 +527,7 @@ impl Server {
 		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
 			self.output.insert(0, format!("{}", msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<lsp::WindowProgress>() {
-			let name = format!("{}-{}", client.name, msg.id);
+			let name = format!("{}-{}", client_name, msg.id);
 			if msg.done.unwrap_or(false) {
 				self.progress.remove(&name);
 			} else {
@@ -531,7 +537,7 @@ impl Server {
 				);
 			}
 		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ProgressParams>() {
-			let name = format!("{}-{:?}", client.name, msg.token);
+			let name = format!("{}-{:?}", client_name, msg.token);
 			match &msg.value {
 				ProgressParamsValue::WorkDone(value) => match value {
 					WorkDoneProgress::Begin(value) => {
@@ -720,16 +726,53 @@ impl Server {
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<CodeActionResponse>>() {
 			if let Some(msg) = msg {
-				self.actions.clear();
-				let mut v = vec![];
-				for m in msg.iter().cloned() {
-					v.push(Action::Command(m));
+				if self.autorun.remove_entry(&msg_id.unwrap()).is_some() {
+					for m in msg.iter().cloned() {
+						self.run_action(url.clone().unwrap(), &Action::Command(m))?;
+					}
+				} else {
+					self.actions.clear();
+					let mut v = vec![];
+					for m in msg.iter().cloned() {
+						v.push(Action::Command(m));
+					}
+					self.actions.insert(client_id.clone().unwrap(), v);
 				}
-				self.actions.insert(client_id.clone().unwrap(), v);
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<TextEdit>>>() {
 			if let Some(msg) = msg {
-				self.apply_text_edits(&url.unwrap(), InsertTextFormat::PlainText, msg)?;
+				self.apply_text_edits(&url.clone().unwrap(), InsertTextFormat::PlainText, msg)?;
+				// Run any on put actions.
+				let actions = self
+					.config
+					.servers
+					.get(&client_name)
+					.unwrap()
+					.actions_on_put
+					.clone()
+					.unwrap_or(vec![]);
+				if !actions.is_empty() {
+					let client = self.clients.get_mut(&client_name).unwrap();
+					let id = client.send::<CodeActionRequest>(CodeActionParams {
+						text_document: TextDocumentIdentifier {
+							uri: url.clone().unwrap(),
+						},
+						range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+						context: CodeActionContext {
+							diagnostics: vec![],
+							only: Some(actions),
+						},
+						work_done_progress_params: WorkDoneProgressParams {
+							work_done_token: None,
+						},
+						partial_result_params: PartialResultParams {
+							partial_result_token: None,
+						},
+					})?;
+					self.requests
+						.insert(ClientId::new(&client_name, id), url.clone().unwrap());
+					self.autorun.insert(id, ());
+				}
 			}
 		} else if let Some(msg) = msg.downcast_ref::<Option<GotoImplementationResponse>>() {
 			if let Some(msg) = msg {
@@ -975,6 +1018,9 @@ impl Server {
 		let url = self.requests.get(&client_id).unwrap().clone();
 		let action = &self.actions.get(&client_id).unwrap()[idx].clone();
 		self.actions.clear();
+		self.run_action(url, action)
+	}
+	fn run_action(&mut self, url: Url, action: &Action) -> Result<()> {
 		match action {
 			Action::Command(CodeActionOrCommand::Command(_cmd)) => panic!("unsupported"),
 			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
@@ -987,7 +1033,11 @@ impl Server {
 					.insert_text_format
 					.unwrap_or(InsertTextFormat::PlainText);
 				if let Some(edit) = item.text_edit.clone() {
-					return self.apply_text_edits(&url, format, &vec![edit]);
+					match edit {
+						CompletionTextEdit::Edit(edit) => {
+							return self.apply_text_edits(&url, format, &vec![edit])
+						}
+					}
 				}
 				panic!("unsupported");
 			}
@@ -1053,7 +1103,15 @@ impl Server {
 		// TODO: make a common send method so requests is populated the
 		// same here and in run_event.
 		let capabilities = self.capabilities.get(&sw.client).unwrap();
-		if capabilities.document_formatting_provider.unwrap_or(false) {
+		if self
+			.config
+			.servers
+			.get(&sw.client)
+			.unwrap()
+			.format_on_put
+			.unwrap_or(true)
+			&& capabilities.document_formatting_provider.unwrap_or(false)
+		{
 			let format_req_id = client.send::<Formatting>(DocumentFormattingParams {
 				text_document: sw.doc.clone(),
 				options: FormattingOptions {

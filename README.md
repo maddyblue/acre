@@ -18,35 +18,35 @@ The [latest release](https://github.com/mjibson/acre/releases/latest) is availab
 
 # Configuration
 
-Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX, but the location will be printed in an error if it does not exist). The file should contain an array of `servers` objects with the fields:
+Configuration (which servers to run) is handled by a file at `~/.config/acre.toml` (note: I'm not sure if this is true on OSX, but the location will be printed in an error if it does not exist). The file should contain a `servers` object with where names are LSP servers and values are an object:
 
-- `name`: the name of the server.
-- `executable` (optional): the name of the binary to invoke. If not present, uses `name`.
+- `executable` (optional): the name of the binary to invoke. If not present, uses the name.
 - `files`: regex matching files that should be associated with this server.
 - `root_uri` (optional): Root URI of the workspace.
 - `workspace_folders` (optional): array of workspace folder URIs.
 - `options` (optional): list of options to be sent to the server.
+- `format_on_put` (optional): boolean (defaults to true) to run formatting on Put.
+- `actions_on_put` (optional): array of actions (strings) to run on Put. Only useful if `format_on_put` is not false.
 
 URIs should look something like `file:///home/user/project`.
 
 Here's an example file for `rust-analyzer` and `gopls`:
 
-```
-[[servers]]
-name = "rust-analyzer"
+```[servers.rust-analyzer]
 files = "\\.rs$"
 workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
 ]
+format_on_put = false
 
-[[servers]]
-name = "gopls"
+[servers.gopls]
 files = '\.go$'
 root_uri = "file:///home/username/go-project"
+actions_on_put = ["source.organizeImports"]
 ```
 
-This will execute the `rust-analyzer-linux` binary and associate it with all files ending in `.rs`. Two workspaces are configured. `gopls` will run on a single root for `.go` files.
+This will execute the `rust-analyzer-linux` binary and associate it with all files ending in `.rs`. Two workspaces are configured. `gopls` will run on a single root for `.go` files. `gopls` will run the `organizeImports` command (i.e., `goimports`) on Put.
 
 Options to pass to each server can be added:
 
