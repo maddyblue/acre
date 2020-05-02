@@ -749,6 +749,28 @@ impl Server {
 		}
 		Ok(())
 	}
+	fn apply_workspace_edit(&mut self, edit: &WorkspaceEdit) -> Result<()> {
+		if let Some(ref doc_changes) = edit.document_changes {
+			match doc_changes {
+				DocumentChanges::Edits(edits) => {
+					for edit in edits {
+						self.apply_text_edits(
+							&edit.text_document.uri,
+							InsertTextFormat::PlainText,
+							&edit.edits,
+						)?;
+					}
+				}
+				_ => panic!("unsupported document_changes {:?}", doc_changes),
+			}
+		}
+		if let Some(ref changes) = edit.changes {
+			for (url, edits) in changes {
+				self.apply_text_edits(&url, InsertTextFormat::PlainText, &edits)?;
+			}
+		}
+		Ok(())
+	}
 	fn apply_text_edits(
 		&mut self,
 		url: &Url,
@@ -916,7 +938,7 @@ impl Server {
 			Action::Command(CodeActionOrCommand::Command(_cmd)) => panic!("unsupported"),
 			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
 				if let Some(edit) = action.edit.clone() {
-					println!("edit: {:?}", edit);
+					self.apply_workspace_edit(&edit)?;
 				}
 			}
 			Action::Completion(item) => {
