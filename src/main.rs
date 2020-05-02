@@ -352,11 +352,8 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
-			#[cfg(debug_assertions)]
-			{
-				if caps.code_action_provider.is_some() {
-					body.push_str("[assist] ");
-				}
+			if caps.code_action_provider.is_some() {
+				body.push_str("[assist] ");
 			}
 			if caps.completion_provider.is_some() {
 				body.push_str("[complete] ");
