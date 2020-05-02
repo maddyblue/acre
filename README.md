@@ -29,7 +29,7 @@ Configuration (which servers to run) is handled by a file at `~/.config/acre.tom
 
 URIs should look something like `file:///home/user/project`.
 
-Here's an example file for `rust-analyzer`:
+Here's an example file for `rust-analyzer` and `gopls`:
 
 ```
 [[servers]]
@@ -39,20 +39,25 @@ workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
 ]
-```
 
-This will execute the `rust-analyzer-linux` binary and associate it with all files ending in `.rs`. Two workspaces are configured. Add more `[[servers]]` blocks for others.
-
-For `gopls`:
-
-```
 [[servers]]
 name = "gopls"
 files = '\.go$'
 root_uri = "file:///home/username/go-project"
+```
+
+This will execute the `rust-analyzer-linux` binary and associate it with all files ending in `.rs`. Two workspaces are configured. `gopls` will run on a single root for `.go` files.
+
+Options to pass to each server can be added:
+
+```
+[[servers]]
+name = "some-server"
+files = '\.ext$'
+root_uri = "file:///home/username/project"
 [servers.options]
-usePlaceholders = true
-completeUnimported = true
+enableSomething = true
+hoverMode = "OneLine"
 ```
 
 # Tested servers
