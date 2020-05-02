@@ -25,7 +25,7 @@ Configuration (which servers to run) is handled by a file at `~/.config/acre.tom
 - `files`: regex matching files that should be associated with this server.
 - `root_uri` (optional): Root URI of the workspace.
 - `workspace_folders` (optional): array of workspace folder URIs.
-- `options'` (optional): list of options to be sent to the server.
+- `options` (optional): list of options to be sent to the server.
 
 URIs should look something like `file:///home/user/project`.
 
