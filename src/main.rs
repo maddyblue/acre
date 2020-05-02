@@ -6,6 +6,7 @@ use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
 use regex::Regex;
 use serde::Deserialize;
+use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -28,6 +29,7 @@ struct ConfigServer {
 	files: String,
 	root_uri: Option<String>,
 	workspace_folders: Option<Vec<String>>,
+	options: Option<Value>,
 }
 
 fn main() -> Result<()> {
@@ -54,6 +56,7 @@ fn main() -> Result<()> {
 			std::iter::empty(),
 			server.root_uri,
 			server.workspace_folders,
+			server.options,
 		)?);
 	}
 	if clients.is_empty() {

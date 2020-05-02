@@ -30,6 +30,7 @@ impl Client {
 		args: I,
 		root_uri: Option<String>,
 		workspace_folders: Option<Vec<String>>,
+		options: Option<serde_json::Value>,
 	) -> Result<Client>
 	where
 		I: IntoIterator<Item = S>,
@@ -197,7 +198,7 @@ impl Client {
 			process_id: Some(1),
 			root_path: None,
 			root_uri,
-			initialization_options: None,
+			initialization_options: options,
 			capabilities: ClientCapabilities::default(),
 			trace: None,
 			workspace_folders,
@@ -300,6 +301,7 @@ mod tests {
 			"rls",
 			std::iter::empty(),
 			Some("file:///home/mjibson/go/src/github.com/mjibson/plan9".to_string()),
+			None,
 			None,
 		)
 		.unwrap();
