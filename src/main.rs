@@ -845,10 +845,23 @@ impl Server {
 		let id;
 		match ev.text.as_str() {
 			"definition" => {
-				id = client.send::<GotoDefinition>(sw.text_doc_pos()?)?;
+				id = client.send::<GotoDefinition>(GotoDefinitionParams {
+					text_document_position_params: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+				})?;
 			}
 			"hover" => {
-				id = client.send::<HoverRequest>(sw.text_doc_pos()?)?;
+				id = client.send::<HoverRequest>(HoverParams {
+					text_document_position_params: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+				})?;
 			}
 			"complete" => {
 				id = client.send::<Completion>(CompletionParams {
@@ -871,6 +884,9 @@ impl Server {
 					work_done_progress_params: WorkDoneProgressParams {
 						work_done_token: None,
 					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
 					context: ReferenceContext {
 						include_declaration: true,
 					},
@@ -879,10 +895,22 @@ impl Server {
 			"symbols" => {
 				id = client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
 					text_document: TextDocumentIdentifier::new(sw.url.clone()),
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
 				})?;
 			}
 			"signature" => {
-				id = client.send::<SignatureHelpRequest>(sw.text_doc_pos()?)?;
+				id = client.send::<SignatureHelpRequest>(SignatureHelpParams {
+					context: None,
+					text_document_position_params: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+				})?;
 			}
 			"lens" => {
 				id = client.send::<CodeLensRequest>(CodeLensParams {
@@ -916,10 +944,26 @@ impl Server {
 				})?;
 			}
 			"impl" => {
-				id = client.send::<GotoImplementation>(sw.text_doc_pos()?)?;
+				id = client.send::<GotoImplementation>(GotoImplementationParams {
+					text_document_position_params: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+				})?;
 			}
 			"typedef" => {
-				id = client.send::<GotoTypeDefinition>(sw.text_doc_pos()?)?;
+				id = client.send::<GotoTypeDefinition>(GotoDefinitionParams {
+					text_document_position_params: sw.text_doc_pos()?,
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
+					partial_result_params: PartialResultParams {
+						partial_result_token: None,
+					},
+				})?;
 			}
 			_ => return Ok(()),
 		};
