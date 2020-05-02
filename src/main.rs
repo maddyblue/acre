@@ -792,14 +792,12 @@ impl Server {
 		sw.w.seek(File::Body, std::io::SeekFrom::Start(0))?;
 		sw.w.ctl("nomark")?;
 		sw.w.ctl("mark")?;
-		let mut delta: i64 = 0;
 		for edit in edits.iter().rev() {
-			let soff =
-				offsets.line_to_offset(edit.range.start.line, edit.range.start.character) as i64;
-			let eoff = offsets.line_to_offset(edit.range.end.line, edit.range.end.character) as i64;
-			let addr = format!("#{},#{}", soff + delta, eoff + delta);
+			let soff = offsets.line_to_offset(edit.range.start.line, edit.range.start.character);
+			let eoff = offsets.line_to_offset(edit.range.end.line, edit.range.end.character);
+			let addr = format!("#{},#{}", soff, eoff);
 			sw.w.addr(&addr)?;
-			let n = match format {
+			match format {
 				InsertTextFormat::Snippet => {
 					lazy_static! {
 						static ref SNIPPET: Regex =
@@ -813,8 +811,7 @@ impl Server {
 					sw.w.write(File::Data, &edit.new_text)?;
 					edit.new_text.len()
 				}
-			} as i64;
-			delta += n - (eoff - soff);
+			};
 		}
 		Ok(())
 	}
