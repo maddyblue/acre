@@ -23,8 +23,9 @@ Configuration (which servers to run) is handled by a file at `~/.config/acre.tom
 - `name`: the name of the server.
 - `executable` (optional): the name of the binary to invoke. If not present, uses `name`.
 - `files`: regex matching files that should be associated with this server.
-- `root_uri`: (optional): Root URI of the workspace.
+- `root_uri` (optional): Root URI of the workspace.
 - `workspace_folders` (optional): array of workspace folder URIs.
+- 'options' (optional): list of options to be sent to the server.
 
 URIs should look something like `file:///home/user/project`.
 
@@ -41,6 +42,18 @@ workspace_folders = [
 ```
 
 This will execute the `rust-analyzer-linux` binary and associate it with all files ending in `.rs`. Two workspaces are configured. Add more `[[servers]]` blocks for others.
+
+For `gopls`:
+
+```
+[[servers]]
+name = "gopls"
+files = '\.go$'
+root_uri = "file:///home/username/go-project"
+[servers.options]
+usePlaceholders = true
+completeUnimported = true
+```
 
 # Tested servers
 
