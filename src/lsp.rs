@@ -3,12 +3,8 @@ use crossbeam_channel::{unbounded, Receiver};
 use lsp_types::{notification::*, request::*, *};
 use regex;
 use serde_json;
-use std::any::Any;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread;
 
 pub struct Client {
@@ -17,8 +13,8 @@ pub struct Client {
 	pub files: regex::Regex,
 	stdin: ChildStdin,
 	next_id: usize,
-	id_map: Arc<Mutex<HashMap<usize, String>>>,
-	pub msg_r: Receiver<(Option<usize>, Box<dyn Send + Any>)>,
+
+	pub msg_r: Receiver<Vec<u8>>,
 }
 
 impl Client {
@@ -31,7 +27,7 @@ impl Client {
 		root_uri: Option<String>,
 		workspace_folders: Option<Vec<String>>,
 		options: Option<serde_json::Value>,
-	) -> Result<Client>
+	) -> Result<(Client, usize)>
 	where
 		I: IntoIterator<Item = S>,
 		S: AsRef<std::ffi::OsStr> + std::fmt::Display + Clone,
@@ -52,9 +48,7 @@ impl Client {
 			stdin,
 			next_id: 1,
 			msg_r,
-			id_map: Arc::new(Mutex::new(HashMap::new())),
 		};
-		let im = Arc::clone(&c.id_map);
 		thread::spawn(move || loop {
 			let mut line = String::new();
 			let mut content_len: usize = 0;
@@ -85,94 +79,7 @@ impl Client {
 			if cfg!(debug_assertions) {
 				println!("got: {}", std::str::from_utf8(&v).unwrap());
 			}
-			let msg: DeMessage = serde_json::from_reader(Cursor::new(&v)).unwrap();
-			let d: Box<dyn Send + Any> = if let Some(err) = msg.error {
-				Box::new(err)
-			} else if let Some(id) = msg.id {
-				if msg.params.is_some() {
-					println!("unsupported server -> client message:");
-					println!("{}", std::str::from_utf8(&v).unwrap());
-					continue;
-				}
-				let typ = im.lock().unwrap().remove(&id).unwrap();
-				let res = match msg.result {
-					Some(res) => res,
-					None => continue,
-				};
-				// TODO: figure out how to pass the structs over the chan instead of strings.
-				match typ.as_str() {
-					Initialize::METHOD => {
-						Box::new(serde_json::from_str::<InitializeResult>(res.get()).unwrap())
-					}
-					GotoDefinition::METHOD => Box::new(
-						serde_json::from_str::<Option<GotoDefinitionResponse>>(res.get()).unwrap(),
-					),
-					HoverRequest::METHOD => {
-						Box::new(serde_json::from_str::<Option<Hover>>(res.get()).unwrap())
-					}
-					Completion::METHOD => Box::new(
-						serde_json::from_str::<Option<CompletionResponse>>(res.get()).unwrap(),
-					),
-					References::METHOD => {
-						Box::new(serde_json::from_str::<Option<Vec<Location>>>(res.get()).unwrap())
-					}
-					DocumentSymbolRequest::METHOD => Box::new(
-						serde_json::from_str::<Option<DocumentSymbolResponse>>(res.get()).unwrap(),
-					),
-					SignatureHelpRequest::METHOD => {
-						Box::new(serde_json::from_str::<Option<SignatureHelp>>(res.get()).unwrap())
-					}
-					CodeLensRequest::METHOD => {
-						Box::new(serde_json::from_str::<Option<Vec<CodeLens>>>(res.get()).unwrap())
-					}
-					CodeActionRequest::METHOD => Box::new(
-						serde_json::from_str::<Option<CodeActionResponse>>(res.get()).unwrap(),
-					),
-					Formatting::METHOD => {
-						Box::new(serde_json::from_str::<Option<Vec<TextEdit>>>(res.get()).unwrap())
-					}
-					GotoImplementation::METHOD => Box::new(
-						serde_json::from_str::<Option<GotoImplementationResponse>>(res.get())
-							.unwrap(),
-					),
-					GotoTypeDefinition::METHOD => Box::new(
-						serde_json::from_str::<Option<GotoTypeDefinitionResponse>>(res.get())
-							.unwrap(),
-					),
-					_ => panic!("unrecognized type: {}", typ),
-				}
-			} else if let Some(method) = msg.method {
-				match method.as_str() {
-					LogMessage::METHOD => Box::new(
-						serde_json::from_str::<LogMessageParams>(msg.params.unwrap().get())
-							.unwrap(),
-					),
-					PublishDiagnostics::METHOD => Box::new(
-						serde_json::from_str::<lsp_types::PublishDiagnosticsParams>(
-							msg.params.unwrap().get(),
-						)
-						.unwrap(),
-					),
-					ShowMessage::METHOD => Box::new(
-						serde_json::from_str::<lsp_types::ShowMessageParams>(
-							msg.params.unwrap().get(),
-						)
-						.unwrap(),
-					),
-					Progress::METHOD => Box::new(
-						serde_json::from_str::<lsp_types::ProgressParams>(
-							msg.params.unwrap().get(),
-						)
-						.unwrap(),
-					),
-					_ => {
-						panic!("unrecognized method: {}", method);
-					}
-				}
-			} else {
-				panic!("unhandled lsp msg: {:?}", msg);
-			};
-			msg_s.send((msg.id, d)).unwrap();
+			msg_s.send(v).unwrap();
 		});
 		// TODO: remove the unwrap here. Unsure how to bubble up errors
 		// from a closure.
@@ -191,7 +98,7 @@ impl Client {
 			Some(u) => Some(Url::parse(&u)?),
 			None => None,
 		};
-		c.send::<Initialize>(InitializeParams {
+		let id = c.send::<Initialize>(InitializeParams {
 			process_id: Some(1),
 			root_path: None,
 			root_uri,
@@ -200,12 +107,11 @@ impl Client {
 			trace: None,
 			workspace_folders,
 			client_info: None,
-		})
-		.unwrap();
-		Ok(c)
+		})?;
+		Ok((c, id))
 	}
 	pub fn send<R: Request>(&mut self, params: R::Params) -> Result<usize> {
-		let id = self.new_id::<R>()?;
+		let id = self.new_id()?;
 		let msg = RequestMessage {
 			jsonrpc: "2.0",
 			id,
@@ -238,13 +144,9 @@ impl Client {
 		self.proc.wait()?;
 		Ok(())
 	}
-	fn new_id<R: Request>(&mut self) -> Result<usize> {
+	fn new_id(&mut self) -> Result<usize> {
 		let id = self.next_id;
 		self.next_id += 1;
-		self.id_map
-			.lock()
-			.unwrap()
-			.insert(id, R::METHOD.to_string());
 		Ok(id)
 	}
 }
@@ -292,7 +194,7 @@ mod tests {
 
 	#[test]
 	fn lsp() {
-		let mut l = Client::new(
+		let (mut l, _) = Client::new(
 			"rls".to_string(),
 			".rs".to_string(),
 			"rls",

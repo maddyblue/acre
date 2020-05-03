@@ -7,7 +7,6 @@ use nine::p2000::OpenMode;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs::metadata;
@@ -55,21 +54,21 @@ fn main() -> Result<()> {
 	s.wait()
 }
 
-struct Progress {
+struct WDProgress {
 	name: String,
 	percentage: Option<f64>,
 	message: Option<String>,
 	title: String,
 }
 
-impl Progress {
+impl WDProgress {
 	fn new(
 		name: String,
 		percentage: Option<f64>,
 		message: Option<String>,
 		title: Option<String>,
 	) -> Self {
-		Progress {
+		Self {
 			name,
 			percentage,
 			message,
@@ -78,7 +77,7 @@ impl Progress {
 	}
 }
 
-impl std::fmt::Display for Progress {
+impl std::fmt::Display for WDProgress {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(
 			f,
@@ -128,11 +127,11 @@ struct Server {
 	body: String,
 	output: Vec<String>,
 	focus: String,
-	progress: HashMap<String, Progress>,
+	progress: HashMap<String, WDProgress>,
 	// file name -> list of diagnostics
 	diags: HashMap<String, Vec<String>>,
-	// request (client_name, id) -> file Url
-	requests: HashMap<ClientId, Url>,
+	// request (client_name, id) -> (method, file Url)
+	requests: HashMap<ClientId, (String, Url)>,
 	actions: HashMap<ClientId, Vec<Action>>,
 	// Vec of position and (ClientId, index) into the vec of actions.
 	action_addrs: Vec<(usize, (ClientId, usize))>,
@@ -211,16 +210,22 @@ impl ServerWin {
 impl Server {
 	fn new(config: TomlConfig) -> Result<Server> {
 		let mut clients = vec![];
+		let mut requests = HashMap::new();
 		for (name, server) in config.servers.clone() {
-			clients.push(lsp::Client::new(
+			let (client, msg_id) = lsp::Client::new(
 				name.clone(),
 				server.files,
-				server.executable.unwrap_or(name),
+				server.executable.unwrap_or(name.clone()),
 				std::iter::empty(),
 				server.root_uri,
 				server.workspace_folders,
 				server.options,
-			)?);
+			)?;
+			requests.insert(
+				ClientId::new(name, msg_id),
+				(Initialize::METHOD.into(), Url::parse("file:///").unwrap()),
+			);
+			clients.push(client);
 		}
 
 		let (log_s, log_r) = bounded(0);
@@ -243,7 +248,7 @@ impl Server {
 			body: "".to_string(),
 			focus: "".to_string(),
 			progress: HashMap::new(),
-			requests: HashMap::new(),
+			requests,
 			actions: HashMap::new(),
 			action_addrs: vec![],
 			diags: HashMap::new(),
@@ -515,277 +520,349 @@ impl Server {
 		self.ws = ws;
 		Ok(())
 	}
-	fn lsp_msg(
+	fn lsp_msg(&mut self, client_name: String, orig_msg: Vec<u8>) -> Result<()> {
+		let msg: lsp::DeMessage = serde_json::from_slice(&orig_msg)?;
+		if msg.id.is_some() && msg.error.is_some() {
+			self.lsp_error(
+				ClientId::new(client_name, msg.id.unwrap()),
+				msg.error.unwrap(),
+			)
+		} else if msg.id.is_some() && msg.method.is_some() {
+			self.lsp_request(msg)
+		} else if msg.id.is_some() {
+			self.lsp_response(ClientId::new(client_name, msg.id.unwrap()), msg.result)
+		} else if msg.method.is_some() {
+			self.lsp_notification(client_name, msg.method.unwrap(), msg.params)
+		} else {
+			panic!(
+				"unknown message {}",
+				std::str::from_utf8(&orig_msg).unwrap()
+			);
+		}
+	}
+	fn lsp_error(&mut self, client_id: ClientId, err: lsp::ResponseError) -> Result<()> {
+		self.requests.remove(&client_id);
+		self.output.insert(0, format!("{}", err.message));
+		Ok(())
+	}
+	fn lsp_response(
 		&mut self,
-		client_name: String,
-		msg_id: Option<usize>,
-		msg: Box<dyn Any>,
+		client_id: ClientId,
+		result: Option<Box<serde_json::value::RawValue>>,
 	) -> Result<()> {
-		//let client = self.clients.get_mut(&client_name).unwrap();
-		let client_id = match msg_id {
-			Some(id) => Some(ClientId::new(client_name.clone(), id)),
-			None => None,
-		};
-		let url = match client_id {
-			Some(ref client_id) => match self.requests.get(client_id) {
-				Some(url) => Some(url.clone()),
-				None => None,
-			},
-			None => None,
-		};
-		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
-			self.output.insert(0, format!("{}", msg.message));
-		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ProgressParams>() {
-			let name = format!("{}-{:?}", client_name, msg.token);
-			match &msg.value {
-				ProgressParamsValue::WorkDone(value) => match value {
-					WorkDoneProgress::Begin(value) => {
-						self.progress.insert(
-							name.clone(),
-							Progress::new(
-								name,
-								value.percentage,
-								value.message.clone(),
-								Some(value.title.clone()),
-							),
-						);
-					}
-					WorkDoneProgress::Report(value) => {
-						let p = self.progress.get_mut(&name).unwrap();
-						p.percentage = value.percentage;
-						p.message = value.message.clone();
-					}
-					WorkDoneProgress::End(_) => {
-						self.progress.remove(&name);
-					}
-				},
+		let (typ, url) = self
+			.requests
+			.remove(&client_id)
+			.expect(&format!("expected client id {:?}", client_id));
+		match typ.as_str() {
+			Initialize::METHOD => {
+				let msg = serde_json::from_str::<InitializeResult>(result.unwrap().get())?;
+				self.send_notification::<Initialized>(
+					&client_id.client_name,
+					InitializedParams {},
+				)?;
+				self.capabilities
+					.insert(client_id.client_name, msg.capabilities.clone());
+				self.sync_windows()?;
 			}
-		} else if let Some(msg) = msg.downcast_ref::<lsp_types::PublishDiagnosticsParams>() {
-			let mut v = vec![];
-			let path = msg.uri.path();
-			for p in &msg.diagnostics {
-				let msg = p.message.lines().next().unwrap_or("");
-				v.push(format!(
-					"{}:{}: [{:?}] {}",
-					path,
-					p.range.start.line + 1,
-					p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
-					msg,
-				));
+			GotoDefinition::METHOD => {
+				let msg =
+					serde_json::from_str::<Option<GotoDefinitionResponse>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					goto_definition(&msg)?;
+				}
 			}
-			self.diags.insert(path.to_string(), v);
-		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ShowMessageParams>() {
-			self.output
-				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
-		} else if let Some(msg) = msg.downcast_ref::<lsp_types::LogMessageParams>() {
-			self.output
-				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
-		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
-			self.send_notification::<Initialized>(&client_name, InitializedParams {})?;
-			self.capabilities
-				.insert(client_name, msg.capabilities.clone());
-			self.sync_windows()?;
-		} else if let Some(msg) = msg.downcast_ref::<Option<GotoDefinitionResponse>>() {
-			if let Some(msg) = msg {
-				goto_definition(msg)?;
-			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<Hover>>() {
-			if let Some(msg) = msg {
-				match &msg.contents {
-					HoverContents::Array(mss) => {
-						let mut o: Vec<String> = vec![];
-						for ms in mss {
-							match ms {
-								MarkedString::String(s) => o.push(s.clone()),
-								MarkedString::LanguageString(s) => o.push(s.value.clone()),
-							};
+			HoverRequest::METHOD => {
+				let msg = serde_json::from_str::<Option<Hover>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					match &msg.contents {
+						HoverContents::Array(mss) => {
+							let mut o: Vec<String> = vec![];
+							for ms in mss {
+								match ms {
+									MarkedString::String(s) => o.push(s.clone()),
+									MarkedString::LanguageString(s) => o.push(s.value.clone()),
+								};
+							}
+							self.output.insert(0, o.join("\n"));
 						}
+						HoverContents::Markup(mc) => {
+							self.output.insert(0, mc.value.clone());
+						}
+						_ => panic!("unknown hover response: {:?}", msg),
+					};
+				}
+			}
+			Completion::METHOD => {
+				let msg =
+					serde_json::from_str::<Option<CompletionResponse>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					self.actions.clear();
+					let actions = match msg {
+						CompletionResponse::Array(cis) => cis,
+						CompletionResponse::List(cls) => cls.items,
+					};
+					let mut v = vec![];
+					for a in actions.iter().cloned() {
+						v.push(Action::Completion(a));
+					}
+					v.truncate(10);
+					self.actions.insert(client_id, v);
+				}
+			}
+			References::METHOD => {
+				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(&x)).collect();
+					if o.len() > 0 {
 						self.output.insert(0, o.join("\n"));
 					}
-					HoverContents::Markup(mc) => {
-						self.output.insert(0, mc.value.clone());
-					}
-					_ => panic!("unknown hover response: {:?}", msg),
-				};
-			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<CompletionResponse>>() {
-			if let Some(msg) = msg {
-				self.actions.clear();
-				let actions = match msg {
-					CompletionResponse::Array(cis) => cis,
-					CompletionResponse::List(cls) => &cls.items,
-				};
-				let mut v = vec![];
-				for a in actions.iter().cloned() {
-					v.push(Action::Completion(a));
-				}
-				v.truncate(10);
-				self.actions.insert(client_id.unwrap(), v);
-			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<Location>>>() {
-			if let Some(msg) = msg {
-				let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(x)).collect();
-				if o.len() > 0 {
-					self.output.insert(0, o.join("\n"));
 				}
 			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<DocumentSymbolResponse>>() {
-			if let Some(msg) = msg {
-				let mut o: Vec<String> = vec![];
-				fn add_symbol(
-					o: &mut Vec<String>,
-					container: &Vec<String>,
-					name: &String,
-					kind: SymbolKind,
-					loc: &Location,
-				) {
-					o.push(format!(
-						"{}{} ({:?}): {}",
-						container
-							.iter()
-							.map(|c| format!("{}::", c))
-							.collect::<Vec<String>>()
-							.join(""),
-						name,
-						kind,
-						location_to_plumb(loc),
-					));
-				};
-				match msg.clone() {
-					DocumentSymbolResponse::Flat(sis) => {
-						for si in sis {
-							// Ignore variables in methods.
-							if si.container_name.as_ref().unwrap_or(&"".to_string()).len() == 0
-								&& si.kind == SymbolKind::Variable
-							{
-								continue;
+			DocumentSymbolRequest::METHOD => {
+				let msg =
+					serde_json::from_str::<Option<DocumentSymbolResponse>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					let mut o: Vec<String> = vec![];
+					fn add_symbol(
+						o: &mut Vec<String>,
+						container: &Vec<String>,
+						name: &String,
+						kind: SymbolKind,
+						loc: &Location,
+					) {
+						o.push(format!(
+							"{}{} ({:?}): {}",
+							container
+								.iter()
+								.map(|c| format!("{}::", c))
+								.collect::<Vec<String>>()
+								.join(""),
+							name,
+							kind,
+							location_to_plumb(loc),
+						));
+					};
+					match msg.clone() {
+						DocumentSymbolResponse::Flat(sis) => {
+							for si in sis {
+								// Ignore variables in methods.
+								if si.container_name.as_ref().unwrap_or(&"".to_string()).len() == 0
+									&& si.kind == SymbolKind::Variable
+								{
+									continue;
+								}
+								let cn = match si.container_name.clone() {
+									Some(c) => vec![c],
+									None => vec![],
+								};
+								add_symbol(&mut o, &cn, &si.name, si.kind, &si.location);
 							}
-							let cn = match si.container_name.clone() {
-								Some(c) => vec![c],
-								None => vec![],
+						}
+						DocumentSymbolResponse::Nested(mut dss) => {
+							fn process(
+								url: &Url,
+								mut o: &mut Vec<String>,
+								parents: &Vec<String>,
+								dss: &mut Vec<DocumentSymbol>,
+							) {
+								dss.sort_by(|a, b| a.range.start.line.cmp(&b.range.start.line));
+								for ds in dss {
+									add_symbol(
+										&mut o,
+										parents,
+										&ds.name,
+										ds.kind,
+										&Location::new(url.clone(), ds.range),
+									);
+									if let Some(mut children) = ds.children.clone() {
+										let mut parents = parents.clone();
+										parents.push(ds.name.clone());
+										process(url, o, &parents, &mut children);
+									}
+								}
 							};
-							add_symbol(&mut o, &cn, &si.name, si.kind, &si.location);
+							process(&url, &mut o, &vec![], &mut dss);
 						}
 					}
-					DocumentSymbolResponse::Nested(mut dss) => {
-						fn process(
-							url: &Url,
-							mut o: &mut Vec<String>,
-							parents: &Vec<String>,
-							dss: &mut Vec<DocumentSymbol>,
-						) {
-							dss.sort_by(|a, b| a.range.start.line.cmp(&b.range.start.line));
-							for ds in dss {
-								add_symbol(
-									&mut o,
-									parents,
-									&ds.name,
-									ds.kind,
-									&Location::new(url.clone(), ds.range),
-								);
-								if let Some(mut children) = ds.children.clone() {
-									let mut parents = parents.clone();
-									parents.push(ds.name.clone());
-									process(url, o, &parents, &mut children);
-								}
-							}
+					if o.len() > 0 {
+						self.output.insert(0, o.join("\n"));
+					}
+				}
+			}
+			SignatureHelpRequest::METHOD => {
+				let msg = serde_json::from_str::<Option<SignatureHelp>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					let mut o: Vec<String> = vec![];
+					for sig in &msg.signatures {
+						o.push(sig.label.clone());
+					}
+					if o.len() > 0 {
+						self.output.insert(0, o.join("\n"));
+					}
+				}
+			}
+			CodeLensRequest::METHOD => {
+				let msg = serde_json::from_str::<Option<Vec<CodeLens>>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					let mut o: Vec<String> = vec![];
+					for lens in msg {
+						let loc = Location {
+							uri: url.clone(),
+							range: lens.range,
 						};
-						process(&url.unwrap(), &mut o, &vec![], &mut dss);
+						o.push(format!("{}", location_to_plumb(&loc)));
+					}
+					if o.len() > 0 {
+						self.output.insert(0, o.join("\n"));
 					}
 				}
-				if o.len() > 0 {
-					self.output.insert(0, o.join("\n"));
-				}
 			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<SignatureHelp>>() {
-			if let Some(msg) = msg {
-				let mut o: Vec<String> = vec![];
-				for sig in &msg.signatures {
-					o.push(sig.label.clone());
+			CodeActionRequest::METHOD => {
+				if result.is_none() {
+					return Ok(());
 				}
-				if o.len() > 0 {
-					self.output.insert(0, o.join("\n"));
-				}
-			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<CodeLens>>>() {
-			if let Some(msg) = msg {
-				let mut o: Vec<String> = vec![];
-				let url = url.unwrap();
-				for lens in msg {
-					let loc = Location {
-						uri: url.clone(),
-						range: lens.range,
-					};
-					o.push(format!("{}", location_to_plumb(&loc)));
-				}
-				if o.len() > 0 {
-					self.output.insert(0, o.join("\n"));
-				}
-			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<CodeActionResponse>>() {
-			if let Some(msg) = msg {
-				if self.autorun.remove_entry(&msg_id.unwrap()).is_some() {
-					for m in msg.iter().cloned() {
-						self.run_action(url.clone().unwrap(), &Action::Command(m))?;
+				let msg =
+					serde_json::from_str::<Option<CodeActionResponse>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					if self.autorun.remove_entry(&client_id.msg_id).is_some() {
+						for m in msg.iter().cloned() {
+							self.run_action(&url, &Action::Command(m))?;
+						}
+					} else {
+						self.actions.clear();
+						let mut v = vec![];
+						for m in msg.iter().cloned() {
+							v.push(Action::Command(m));
+						}
+						self.actions.insert(client_id, v);
 					}
-				} else {
-					self.actions.clear();
-					let mut v = vec![];
-					for m in msg.iter().cloned() {
-						v.push(Action::Command(m));
+				}
+			}
+			Formatting::METHOD => {
+				let msg = serde_json::from_str::<Option<Vec<TextEdit>>>(result.unwrap().get())?;
+				if let Some(msg) = msg {
+					self.apply_text_edits(&url, InsertTextFormat::PlainText, &msg)?;
+					// Run any on put actions.
+					let actions = self
+						.config
+						.servers
+						.get(&client_id.client_name)
+						.unwrap()
+						.actions_on_put
+						.clone()
+						.unwrap_or(vec![]);
+					if !actions.is_empty() {
+						let id = self.send_request::<CodeActionRequest>(
+							&client_id.client_name,
+							url.clone(),
+							CodeActionParams {
+								text_document: TextDocumentIdentifier { uri: url },
+								range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+								context: CodeActionContext {
+									diagnostics: vec![],
+									only: Some(actions),
+								},
+								work_done_progress_params: WorkDoneProgressParams {
+									work_done_token: None,
+								},
+								partial_result_params: PartialResultParams {
+									partial_result_token: None,
+								},
+							},
+						)?;
+						self.autorun.insert(id, ());
 					}
-					self.actions.insert(client_id.clone().unwrap(), v);
 				}
 			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<Vec<TextEdit>>>() {
-			if let Some(msg) = msg {
-				self.apply_text_edits(&url.clone().unwrap(), InsertTextFormat::PlainText, msg)?;
-				// Run any on put actions.
-				let actions = self
-					.config
-					.servers
-					.get(&client_name)
-					.unwrap()
-					.actions_on_put
-					.clone()
-					.unwrap_or(vec![]);
-				if !actions.is_empty() {
-					let id = self.send_request::<CodeActionRequest>(
-						&client_name,
-						url.clone().unwrap(),
-						CodeActionParams {
-							text_document: TextDocumentIdentifier {
-								uri: url.clone().unwrap(),
-							},
-							range: Range::new(Position::new(0, 0), Position::new(0, 0)),
-							context: CodeActionContext {
-								diagnostics: vec![],
-								only: Some(actions),
-							},
-							work_done_progress_params: WorkDoneProgressParams {
-								work_done_token: None,
-							},
-							partial_result_params: PartialResultParams {
-								partial_result_token: None,
-							},
-						},
-					)?;
-					self.autorun.insert(id, ());
+			GotoImplementation::METHOD => {
+				let msg = serde_json::from_str::<Option<GotoImplementationResponse>>(
+					result.unwrap().get(),
+				)?;
+				if let Some(msg) = msg {
+					goto_definition(&msg)?;
 				}
 			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<GotoImplementationResponse>>() {
-			if let Some(msg) = msg {
-				goto_definition(msg)?;
+			GotoTypeDefinition::METHOD => {
+				let msg = serde_json::from_str::<Option<GotoTypeDefinitionResponse>>(
+					result.unwrap().get(),
+				)?;
+				if let Some(msg) = msg {
+					goto_definition(&msg)?;
+				}
 			}
-		} else if let Some(msg) = msg.downcast_ref::<Option<GotoTypeDefinitionResponse>>() {
-			if let Some(msg) = msg {
-				goto_definition(msg)?;
-			}
-		} else {
-			// TODO: how do we get the underlying struct here so we
-			// know which message we are missing?
-			panic!("unrecognized msg: {:?}", msg);
+			_ => panic!("unrecognized type: {}", typ),
 		}
+		Ok(())
+	}
+	fn lsp_notification(
+		&mut self,
+		client_name: String,
+		method: String,
+		params: Option<Box<serde_json::value::RawValue>>,
+	) -> Result<()> {
+		match method.as_str() {
+			LogMessage::METHOD => {
+				let msg: LogMessageParams = serde_json::from_str(params.unwrap().get())?;
+				self.output
+					.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
+			}
+			PublishDiagnostics::METHOD => {
+				let msg: PublishDiagnosticsParams = serde_json::from_str(params.unwrap().get())?;
+				let mut v = vec![];
+				let path = msg.uri.path();
+				for p in &msg.diagnostics {
+					let msg = p.message.lines().next().unwrap_or("");
+					v.push(format!(
+						"{}:{}: [{:?}] {}",
+						path,
+						p.range.start.line + 1,
+						p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
+						msg,
+					));
+				}
+				self.diags.insert(path.to_string(), v);
+			}
+			ShowMessage::METHOD => {
+				let msg: ShowMessageParams = serde_json::from_str(params.unwrap().get())?;
+				self.output
+					.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
+			}
+			Progress::METHOD => {
+				let msg: ProgressParams = serde_json::from_str(params.unwrap().get())?;
+				let name = format!("{}-{:?}", client_name, msg.token);
+				match &msg.value {
+					ProgressParamsValue::WorkDone(value) => match value {
+						WorkDoneProgress::Begin(value) => {
+							self.progress.insert(
+								name.clone(),
+								WDProgress::new(
+									name,
+									value.percentage,
+									value.message.clone(),
+									Some(value.title.clone()),
+								),
+							);
+						}
+						WorkDoneProgress::Report(value) => {
+							let p = self.progress.get_mut(&name).unwrap();
+							p.percentage = value.percentage;
+							p.message = value.message.clone();
+						}
+						WorkDoneProgress::End(_) => {
+							self.progress.remove(&name);
+						}
+					},
+				}
+			}
+			_ => {
+				panic!("unrecognized method: {}", method);
+			}
+		}
+		Ok(())
+	}
+	fn lsp_request(&mut self, msg: lsp::DeMessage) -> Result<()> {
+		println!("unknown request {:?}", msg);
 		Ok(())
 	}
 	fn apply_workspace_edit(&mut self, edit: &WorkspaceEdit) -> Result<()> {
@@ -1039,7 +1116,7 @@ impl Server {
 		let client = self.clients.get_mut(client_name).unwrap();
 		let msg_id = client.send::<R>(params)?;
 		self.requests
-			.insert(ClientId::new(client_name, msg_id), url);
+			.insert(ClientId::new(client_name, msg_id), (R::METHOD.into(), url));
 		Ok(msg_id)
 	}
 	fn send_notification<N: notification::Notification>(
@@ -1051,12 +1128,12 @@ impl Server {
 		client.notify::<N>(params)
 	}
 	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
-		let url = self.requests.get(&client_id).unwrap().clone();
+		let (_, url) = self.requests.get(&client_id).unwrap().clone();
 		let action = &self.actions.get(&client_id).unwrap()[idx].clone();
 		self.actions.clear();
-		self.run_action(url, action)
+		self.run_action(&url, action)
 	}
-	fn run_action(&mut self, url: Url, action: &Action) -> Result<()> {
+	fn run_action(&mut self, url: &Url, action: &Action) -> Result<()> {
 		match action {
 			Action::Command(CodeActionOrCommand::Command(_cmd)) => panic!("unsupported"),
 			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
@@ -1071,7 +1148,7 @@ impl Server {
 				if let Some(edit) = item.text_edit.clone() {
 					match edit {
 						CompletionTextEdit::Edit(edit) => {
-							return self.apply_text_edits(&url, format, &vec![edit])
+							return self.apply_text_edits(url, format, &vec![edit])
 						}
 					}
 				}
@@ -1244,8 +1321,8 @@ impl Server {
 				},
 				_ => {
 					let (ch, name) = clients.get(&index).unwrap();
-					let (id, msg) = ch.recv()?;
-					self.lsp_msg(name.to_string(), id, msg)?;
+					let msg = ch.recv()?;
+					self.lsp_msg(name.to_string(), msg)?;
 				}
 			};
 		}
