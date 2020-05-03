@@ -152,7 +152,6 @@ struct Server {
 }
 
 struct ServerWin {
-	name: String,
 	w: Win,
 	doc: TextDocumentIdentifier,
 	url: Url,
@@ -165,7 +164,6 @@ impl ServerWin {
 		let url = Url::parse(&format!("file://{}", name))?;
 		let doc = TextDocumentIdentifier::new(url.clone());
 		Ok(ServerWin {
-			name,
 			w,
 			doc,
 			url,
@@ -203,9 +201,6 @@ impl ServerWin {
 				text,
 			}],
 		})
-	}
-	fn did_change(&mut self, client: &mut lsp::Client) -> Result<()> {
-		client.notify::<DidChangeTextDocument>(self.change_params()?)
 	}
 	fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
 		let pos = self.position()?;
@@ -292,7 +287,13 @@ impl Server {
 		thread::Builder::new()
 			.name("WindowEvents".to_string())
 			.spawn(move || loop {
-				let mut ev = wev.read_event().unwrap();
+				let mut ev = match wev.read_event() {
+					Ok(ev) => ev,
+					Err(err) => {
+						println!("read event err {}", err);
+						return;
+					}
+				};
 				match ev.c2 {
 					'x' | 'X' => match ev.text.as_str() {
 						"Del" => {
@@ -482,14 +483,17 @@ impl Server {
 					drop(fsys);
 					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
 					let (version, text) = sw.text()?;
-					client.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
-						text_document: TextDocumentItem::new(
-							sw.url.clone(),
-							"".to_string(), // lang id
-							version,
-							text,
-						),
-					})?;
+					self.send_notification::<DidOpenTextDocument>(
+						&sw.client,
+						DidOpenTextDocumentParams {
+							text_document: TextDocumentItem::new(
+								sw.url.clone(),
+								"".to_string(), // lang id
+								version,
+								text,
+							),
+						},
+					)?;
 
 					sw
 				}
@@ -497,11 +501,16 @@ impl Server {
 			ws.insert(wi.id, w);
 		}
 		// close remaining files
-		for (_, w) in &self.ws {
-			let client = self.clients.get_mut(&w.client).unwrap();
-			client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
-				text_document: w.doc.clone(),
-			})?;
+		let to_close: Vec<(String, TextDocumentIdentifier)> = self
+			.ws
+			.iter()
+			.map(|(_, w)| (w.client.clone(), w.doc.clone()))
+			.collect();
+		for (client_name, text_document) in to_close {
+			self.send_notification::<DidCloseTextDocument>(
+				&client_name,
+				DidCloseTextDocumentParams { text_document },
+			)?;
 		}
 		self.ws = ws;
 		Ok(())
@@ -526,16 +535,6 @@ impl Server {
 		};
 		if let Some(msg) = msg.downcast_ref::<lsp::ResponseError>() {
 			self.output.insert(0, format!("{}", msg.message));
-		} else if let Some(msg) = msg.downcast_ref::<lsp::WindowProgress>() {
-			let name = format!("{}-{}", client_name, msg.id);
-			if msg.done.unwrap_or(false) {
-				self.progress.remove(&name);
-			} else {
-				self.progress.insert(
-					name.clone(),
-					Progress::new(name, msg.percentage, msg.message.clone(), msg.title.clone()),
-				);
-			}
 		} else if let Some(msg) = msg.downcast_ref::<lsp_types::ProgressParams>() {
 			let name = format!("{}-{:?}", client_name, msg.token);
 			match &msg.value {
@@ -582,8 +581,7 @@ impl Server {
 			self.output
 				.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
 		} else if let Some(msg) = msg.downcast_ref::<InitializeResult>() {
-			let client = self.clients.get_mut(&client_name).unwrap();
-			client.notify::<Initialized>(InitializedParams {})?;
+			self.send_notification::<Initialized>(&client_name, InitializedParams {})?;
 			self.capabilities
 				.insert(client_name, msg.capabilities.clone());
 			self.sync_windows()?;
@@ -752,25 +750,26 @@ impl Server {
 					.clone()
 					.unwrap_or(vec![]);
 				if !actions.is_empty() {
-					let client = self.clients.get_mut(&client_name).unwrap();
-					let id = client.send::<CodeActionRequest>(CodeActionParams {
-						text_document: TextDocumentIdentifier {
-							uri: url.clone().unwrap(),
+					let id = self.send_request::<CodeActionRequest>(
+						&client_name,
+						url.clone().unwrap(),
+						CodeActionParams {
+							text_document: TextDocumentIdentifier {
+								uri: url.clone().unwrap(),
+							},
+							range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+							context: CodeActionContext {
+								diagnostics: vec![],
+								only: Some(actions),
+							},
+							work_done_progress_params: WorkDoneProgressParams {
+								work_done_token: None,
+							},
+							partial_result_params: PartialResultParams {
+								partial_result_token: None,
+							},
 						},
-						range: Range::new(Position::new(0, 0), Position::new(0, 0)),
-						context: CodeActionContext {
-							diagnostics: vec![],
-							only: Some(actions),
-						},
-						work_done_progress_params: WorkDoneProgressParams {
-							work_done_token: None,
-						},
-						partial_result_params: PartialResultParams {
-							partial_result_token: None,
-						},
-					})?;
-					self.requests
-						.insert(ClientId::new(&client_name, id), url.clone().unwrap());
+					)?;
 					self.autorun.insert(id, ());
 				}
 			}
@@ -880,139 +879,176 @@ impl Server {
 		}
 		Ok(())
 	}
-	fn run_event(&mut self, ev: Event, wid: usize) -> Result<()> {
+	fn did_change(&mut self, wid: usize) -> Result<()> {
 		let sw = self.ws.get_mut(&wid).unwrap();
-		let client_name = self.files.get(&sw.name).unwrap();
-		let client = self.clients.get_mut(client_name).unwrap();
-		sw.did_change(client)?;
-		let id;
+		let client = sw.client.clone();
+		let params = sw.change_params()?;
+		self.send_notification::<DidChangeTextDocument>(&client, params)
+	}
+	fn run_event(&mut self, ev: Event, wid: usize) -> Result<()> {
+		self.did_change(wid)?;
+		let sw = self.ws.get_mut(&wid).unwrap();
+		let client_name = &sw.client.clone();
+		let url = sw.url.clone();
+		let text_document_position_params = sw.text_doc_pos()?;
+		let text_document_position = text_document_position_params.clone();
+		let text_document = TextDocumentIdentifier::new(url.clone());
+		let work_done_progress_params = WorkDoneProgressParams {
+			work_done_token: None,
+		};
+		let partial_result_params = PartialResultParams {
+			partial_result_token: None,
+		};
+		let range = Range {
+			start: text_document_position.position,
+			end: text_document_position.position,
+		};
+		drop(sw);
 		match ev.text.as_str() {
 			"definition" => {
-				id = client.send::<GotoDefinition>(GotoDefinitionParams {
-					text_document_position_params: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<GotoDefinition>(
+					client_name,
+					url,
+					GotoDefinitionParams {
+						text_document_position_params,
+						work_done_progress_params,
+						partial_result_params,
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
 			"hover" => {
-				id = client.send::<HoverRequest>(HoverParams {
-					text_document_position_params: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<HoverRequest>(
+					client_name,
+					url,
+					HoverParams {
+						text_document_position_params,
+						work_done_progress_params,
 					},
-				})?;
+				)?;
 			}
 			"complete" => {
-				id = client.send::<Completion>(CompletionParams {
-					text_document_position: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<Completion>(
+					client_name,
+					url,
+					CompletionParams {
+						text_document_position,
+						work_done_progress_params,
+						partial_result_params,
+						context: Some(CompletionContext {
+							trigger_kind: CompletionTriggerKind::Invoked,
+							trigger_character: None,
+						}),
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-					context: Some(CompletionContext {
-						trigger_kind: CompletionTriggerKind::Invoked,
-						trigger_character: None,
-					}),
-				})?;
+				)?;
 			}
 			"references" => {
-				id = client.send::<References>(ReferenceParams {
-					text_document_position: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<References>(
+					client_name,
+					url,
+					ReferenceParams {
+						text_document_position,
+						work_done_progress_params,
+						partial_result_params,
+						context: ReferenceContext {
+							include_declaration: true,
+						},
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-					context: ReferenceContext {
-						include_declaration: true,
-					},
-				})?;
+				)?;
 			}
 			"symbols" => {
-				id = client.send::<DocumentSymbolRequest>(DocumentSymbolParams {
-					text_document: TextDocumentIdentifier::new(sw.url.clone()),
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<DocumentSymbolRequest>(
+					client_name,
+					url,
+					DocumentSymbolParams {
+						text_document,
+						work_done_progress_params,
+						partial_result_params,
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
 			"signature" => {
-				id = client.send::<SignatureHelpRequest>(SignatureHelpParams {
-					context: None,
-					text_document_position_params: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<SignatureHelpRequest>(
+					client_name,
+					url,
+					SignatureHelpParams {
+						context: None,
+						text_document_position_params,
+						work_done_progress_params,
 					},
-				})?;
+				)?;
 			}
 			"lens" => {
-				id = client.send::<CodeLensRequest>(CodeLensParams {
-					text_document: TextDocumentIdentifier::new(sw.url.clone()),
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<CodeLensRequest>(
+					client_name,
+					url,
+					CodeLensParams {
+						text_document,
+						work_done_progress_params,
+						partial_result_params,
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
 			"assist" => {
-				let pos = sw.position()?;
-				id = client.send::<CodeActionRequest>(CodeActionParams {
-					text_document: TextDocumentIdentifier::new(sw.url.clone()),
-					range: Range {
-						start: pos,
-						end: pos,
+				self.send_request::<CodeActionRequest>(
+					client_name,
+					url,
+					CodeActionParams {
+						text_document,
+						range,
+						context: CodeActionContext {
+							diagnostics: vec![],
+							only: None,
+						},
+						work_done_progress_params,
+						partial_result_params,
 					},
-					context: CodeActionContext {
-						diagnostics: vec![],
-						only: None,
-					},
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
-					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
 			"impl" => {
-				id = client.send::<GotoImplementation>(GotoImplementationParams {
-					text_document_position_params: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<GotoImplementation>(
+					client_name,
+					url,
+					GotoImplementationParams {
+						text_document_position_params,
+						work_done_progress_params,
+						partial_result_params,
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
 			"typedef" => {
-				id = client.send::<GotoTypeDefinition>(GotoDefinitionParams {
-					text_document_position_params: sw.text_doc_pos()?,
-					work_done_progress_params: WorkDoneProgressParams {
-						work_done_token: None,
+				self.send_request::<GotoTypeDefinition>(
+					client_name,
+					url,
+					GotoDefinitionParams {
+						text_document_position_params,
+						work_done_progress_params,
+						partial_result_params,
 					},
-					partial_result_params: PartialResultParams {
-						partial_result_token: None,
-					},
-				})?;
+				)?;
 			}
-			_ => return Ok(()),
-		};
-		self.requests
-			.insert(ClientId::new(client_name, id), sw.url.clone());
+			_ => {}
+		}
 		Ok(())
+	}
+	fn send_request<R: Request>(
+		&mut self,
+		client_name: &String,
+		url: Url,
+		params: R::Params,
+	) -> Result<usize> {
+		let client = self.clients.get_mut(client_name).unwrap();
+		let msg_id = client.send::<R>(params)?;
+		self.requests
+			.insert(ClientId::new(client_name, msg_id), url);
+		Ok(msg_id)
+	}
+	fn send_notification<N: notification::Notification>(
+		&mut self,
+		client_name: &String,
+		params: N::Params,
+	) -> Result<()> {
+		let client = self.clients.get_mut(client_name).unwrap();
+		client.notify::<N>(params)
 	}
 	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
 		let url = self.requests.get(&client_id).unwrap().clone();
@@ -1089,47 +1125,51 @@ impl Server {
 		Ok(())
 	}
 	fn cmd_put(&mut self, id: usize) -> Result<()> {
-		let sw = if let Some(sw) = self.ws.get_mut(&id) {
+		self.did_change(id)?;
+		let sw = if let Some(sw) = self.ws.get(&id) {
 			sw
 		} else {
 			// Ignore unknown ids (untracked files, zerox, etc.).
 			return Ok(());
 		};
-		let client = self.clients.get_mut(&sw.client).unwrap();
-		sw.did_change(client)?;
-		client.notify::<DidSaveTextDocument>(DidSaveTextDocumentParams {
-			text_document: sw.doc.clone(),
-		})?;
-		// TODO: make a common send method so requests is populated the
-		// same here and in run_event.
-		let capabilities = self.capabilities.get(&sw.client).unwrap();
+		let client_name = &sw.client.clone();
+		let text_document = sw.doc.clone();
+		let url = sw.url.clone();
+		drop(sw);
+		self.send_notification::<DidSaveTextDocument>(
+			client_name,
+			DidSaveTextDocumentParams {
+				text_document: text_document.clone(),
+			},
+		)?;
+		let capabilities = self.capabilities.get(client_name).unwrap();
 		if self
 			.config
 			.servers
-			.get(&sw.client)
+			.get(client_name)
 			.unwrap()
 			.format_on_put
 			.unwrap_or(true)
 			&& capabilities.document_formatting_provider.unwrap_or(false)
 		{
-			let format_req_id = client.send::<Formatting>(DocumentFormattingParams {
-				text_document: sw.doc.clone(),
-				options: FormattingOptions {
-					tab_size: 4,
-					insert_spaces: false,
-					properties: HashMap::new(),
-					trim_trailing_whitespace: Some(true),
-					insert_final_newline: Some(true),
-					trim_final_newlines: Some(true),
+			self.send_request::<Formatting>(
+				client_name,
+				url,
+				DocumentFormattingParams {
+					text_document,
+					options: FormattingOptions {
+						tab_size: 4,
+						insert_spaces: false,
+						properties: HashMap::new(),
+						trim_trailing_whitespace: Some(true),
+						insert_final_newline: Some(true),
+						trim_final_newlines: Some(true),
+					},
+					work_done_progress_params: WorkDoneProgressParams {
+						work_done_token: None,
+					},
 				},
-				work_done_progress_params: WorkDoneProgressParams {
-					work_done_token: None,
-				},
-			})?;
-			self.requests.insert(
-				ClientId::new(sw.client.clone(), format_req_id),
-				sw.url.clone(),
-			);
+			)?;
 		}
 		Ok(())
 	}

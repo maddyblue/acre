@@ -1,6 +1,6 @@
 use crate::Result;
 use crossbeam_channel::{unbounded, Receiver};
-use lsp_types::{notification, request::*, *};
+use lsp_types::{notification::*, request::*, *};
 use regex;
 use serde_json;
 use std::any::Any;
@@ -143,26 +143,23 @@ impl Client {
 				}
 			} else if let Some(method) = msg.method {
 				match method.as_str() {
-					"window/progress" => Box::new(
-						serde_json::from_str::<WindowProgress>(msg.params.unwrap().get()).unwrap(),
-					),
-					"window/logMessage" => Box::new(
+					LogMessage::METHOD => Box::new(
 						serde_json::from_str::<LogMessageParams>(msg.params.unwrap().get())
 							.unwrap(),
 					),
-					"textDocument/publishDiagnostics" => Box::new(
+					PublishDiagnostics::METHOD => Box::new(
 						serde_json::from_str::<lsp_types::PublishDiagnosticsParams>(
 							msg.params.unwrap().get(),
 						)
 						.unwrap(),
 					),
-					"window/showMessage" => Box::new(
+					ShowMessage::METHOD => Box::new(
 						serde_json::from_str::<lsp_types::ShowMessageParams>(
 							msg.params.unwrap().get(),
 						)
 						.unwrap(),
 					),
-					"$/progress" => Box::new(
+					Progress::METHOD => Box::new(
 						serde_json::from_str::<lsp_types::ProgressParams>(
 							msg.params.unwrap().get(),
 						)
@@ -209,7 +206,7 @@ impl Client {
 	}
 	pub fn send<R: Request>(&mut self, params: R::Params) -> Result<usize> {
 		let id = self.new_id::<R>()?;
-		let msg = Message {
+		let msg = RequestMessage {
 			jsonrpc: "2.0",
 			id,
 			method: R::METHOD,
@@ -223,8 +220,8 @@ impl Client {
 		write!(self.stdin, "{}", s)?;
 		Ok(id)
 	}
-	pub fn notify<N: notification::Notification>(&mut self, params: N::Params) -> Result<()> {
-		let msg = Notification {
+	pub fn notify<N: Notification>(&mut self, params: N::Params) -> Result<()> {
+		let msg = NotificationMessage {
 			jsonrpc: "2.0",
 			method: N::METHOD,
 			params,
@@ -259,7 +256,7 @@ impl Drop for Client {
 }
 
 #[derive(serde::Serialize)]
-struct Message<P> {
+struct RequestMessage<P> {
 	jsonrpc: &'static str,
 	id: usize,
 	method: &'static str,
@@ -267,7 +264,7 @@ struct Message<P> {
 }
 
 #[derive(serde::Serialize)]
-struct Notification<P> {
+struct NotificationMessage<P> {
 	jsonrpc: &'static str,
 	method: &'static str,
 	params: P,
@@ -307,13 +304,4 @@ mod tests {
 		.unwrap();
 		l.wait().unwrap();
 	}
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct WindowProgress {
-	pub done: Option<bool>,
-	pub id: String,
-	pub message: Option<String>,
-	pub title: Option<String>,
-	pub percentage: Option<f64>,
 }
