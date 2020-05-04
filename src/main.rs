@@ -957,7 +957,11 @@ impl Server {
 		Ok(())
 	}
 	fn did_change(&mut self, wid: usize) -> Result<()> {
-		let sw = self.ws.get_mut(&wid).unwrap();
+		let sw = match self.ws.get_mut(&wid) {
+			Some(sw) => sw,
+			// Ignore untracked windows.
+			None => return Ok(()),
+		};
 		let client = sw.client.clone();
 		let params = sw.change_params()?;
 		self.send_notification::<DidChangeTextDocument>(&client, params)
