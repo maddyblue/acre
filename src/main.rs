@@ -7,6 +7,7 @@ use nine::p2000::OpenMode;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs::metadata;
@@ -612,7 +613,8 @@ impl Server {
 			}
 			References::METHOD => {
 				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.unwrap().get())?;
-				if let Some(msg) = msg {
+				if let Some(mut msg) = msg {
+					msg.sort_by(cmp_location);
 					let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(&x)).collect();
 					if o.len() > 0 {
 						self.output.insert(0, o.join("\n"));
@@ -1378,4 +1380,25 @@ fn format_pct(pct: Option<f64>) -> String {
 		Some(v) => format!("{:.0}", v),
 		None => "?".to_string(),
 	}
+}
+
+fn cmp_location(a: &Location, b: &Location) -> Ordering {
+	if a.uri != b.uri {
+		return a.uri.as_str().cmp(b.uri.as_str());
+	}
+	return cmp_range(&a.range, &b.range);
+}
+
+fn cmp_range(a: &Range, b: &Range) -> Ordering {
+	if a.start != b.start {
+		return cmp_position(&a.start, &b.start);
+	}
+	return cmp_position(&a.end, &b.end);
+}
+
+fn cmp_position(a: &Position, b: &Position) -> Ordering {
+	if a.line != b.line {
+		return a.line.cmp(&b.line);
+	}
+	return a.character.cmp(&b.character);
 }
