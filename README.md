@@ -39,7 +39,6 @@ workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
 ]
-format_on_put = false
 
 [servers.gopls]
 files = '\.go$'
