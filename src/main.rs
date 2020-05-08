@@ -441,6 +441,18 @@ impl Server {
 		for (_, p) in &self.progress {
 			write!(&mut body, "{}\n", p)?;
 		}
+		if self.requests.len() > 0 {
+			body.push('\n');
+		}
+		for (client_id, (method, url)) in &self.requests {
+			write!(
+				&mut body,
+				"{}: {}: {}...\n",
+				client_id.client_name,
+				url.path(),
+				method
+			)?;
+		}
 		if self.body != body {
 			self.body = body.clone();
 			self.w.write(File::Addr, &format!(","))?;
