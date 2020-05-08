@@ -98,7 +98,7 @@ impl std::fmt::Display for WDProgress {
 #[derive(Debug, Clone)]
 enum Action {
 	Command(CodeActionOrCommand),
-	Completion(CompletionItem),
+	Completion(Url, CompletionItem),
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -274,7 +274,13 @@ impl Server {
 								if cfg!(debug_assertions) {
 									println!("log reader: {:?}", ev);
 								}
-								log_s.send(ev).unwrap();
+								match log_s.send(ev) {
+									Ok(_) => {}
+									Err(err) => {
+										println!("log_s send err {}", err);
+										return;
+									}
+								}
 							}
 							_ => {
 								if cfg!(debug_assertions) {
@@ -414,7 +420,7 @@ impl Server {
 					Action::Command(CodeActionOrCommand::CodeAction(action)) => {
 						write!(&mut body, "\n[{}]", action.title)?;
 					}
-					Action::Completion(item) => {
+					Action::Completion(_, item) => {
 						write!(&mut body, "\n[insert] {}:", item.label)?;
 						if item.deprecated.unwrap_or(false) {
 							write!(&mut body, " DEPRECATED")?;
@@ -613,7 +619,7 @@ impl Server {
 					};
 					let mut v = vec![];
 					for a in actions.iter().cloned() {
-						v.push(Action::Completion(a));
+						v.push(Action::Completion(url.clone(), a));
 					}
 					v.truncate(10);
 					self.actions.insert(client_id, v);
@@ -737,7 +743,7 @@ impl Server {
 				if let Some(msg) = msg {
 					if self.autorun.remove_entry(&client_id.msg_id).is_some() {
 						for m in msg.iter().cloned() {
-							self.run_action(&url, &Action::Command(m))?;
+							self.run_action(Action::Command(m))?;
 						}
 					} else {
 						self.actions.clear();
@@ -1140,27 +1146,43 @@ impl Server {
 		client.notify::<N>(params)
 	}
 	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
-		let (_, url) = self.requests.get(&client_id).unwrap().clone();
-		let action = &self.actions.get(&client_id).unwrap()[idx].clone();
+		let action = self.actions.remove(&client_id).unwrap().remove(idx);
 		self.actions.clear();
-		self.run_action(&url, action)
+		self.run_action(action)
 	}
-	fn run_action(&mut self, url: &Url, action: &Action) -> Result<()> {
+	fn run_action(&mut self, action: Action) -> Result<()> {
 		match action {
-			Action::Command(CodeActionOrCommand::Command(_cmd)) => panic!("unsupported"),
+			Action::Command(CodeActionOrCommand::Command(cmd)) => {
+				if let Some(args) = cmd.arguments {
+					for arg in args {
+						#[derive(Deserialize)]
+						#[serde(rename_all = "camelCase")]
+						struct ArgWorkspaceEdit {
+							workspace_edit: WorkspaceEdit,
+						}
+						match serde_json::from_value::<ArgWorkspaceEdit>(arg) {
+							Ok(v) => self.apply_workspace_edit(&v.workspace_edit)?,
+							Err(err) => {
+								println!("json err {}", err);
+								continue;
+							}
+						}
+					}
+				}
+			}
 			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
 				if let Some(edit) = action.edit.clone() {
 					self.apply_workspace_edit(&edit)?;
 				}
 			}
-			Action::Completion(item) => {
+			Action::Completion(url, item) => {
 				let format = item
 					.insert_text_format
 					.unwrap_or(InsertTextFormat::PlainText);
 				if let Some(edit) = item.text_edit.clone() {
 					match edit {
 						CompletionTextEdit::Edit(edit) => {
-							return self.apply_text_edits(url, format, &vec![edit])
+							return self.apply_text_edits(&url, format, &vec![edit])
 						}
 					}
 				}
