@@ -52,11 +52,10 @@ This will execute the `rust-analyzer-linux` binary and associate it with all fil
 Options to pass to each server can be added:
 
 ```
-[[servers]]
-name = "some-server"
+[servers.name]
 files = '\.ext$'
 root_uri = "file:///home/username/project"
-[servers.options]
+[servers.name.options]
 enableSomething = true
 hoverMode = "OneLine"
 ```
