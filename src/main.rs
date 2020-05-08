@@ -126,7 +126,7 @@ struct Server {
 	addr: Vec<(usize, usize)>,
 
 	body: String,
-	output: Vec<String>,
+	output: String,
 	focus: String,
 	progress: HashMap<String, WDProgress>,
 	// file name -> list of diagnostics
@@ -245,7 +245,7 @@ impl Server {
 			ws: HashMap::new(),
 			names: vec![],
 			addr: vec![],
-			output: vec![],
+			output: "".to_string(),
 			body: "".to_string(),
 			focus: "".to_string(),
 			progress: HashMap::new(),
@@ -402,10 +402,6 @@ impl Server {
 		}
 		self.addr.push((body.len(), 0));
 		write!(&mut body, "-----\n")?;
-		const MAX_LEN: usize = 1;
-		if self.output.len() > MAX_LEN {
-			self.output.drain(MAX_LEN..);
-		}
 		self.action_addrs.clear();
 		for (client_id, actions) in &self.actions {
 			for (idx, action) in actions.iter().enumerate() {
@@ -436,8 +432,8 @@ impl Server {
 		}
 		self.action_addrs
 			.push((body.len(), (ClientId::new("", 0), 100000)));
-		for s in &self.output {
-			write!(&mut body, "\n{}\n", s)?;
+		if !self.output.is_empty() {
+			write!(&mut body, "\n{}\n", self.output)?;
 		}
 		if self.progress.len() > 0 {
 			body.push('\n');
@@ -543,7 +539,7 @@ impl Server {
 	}
 	fn lsp_error(&mut self, client_id: ClientId, err: lsp::ResponseError) -> Result<()> {
 		self.requests.remove(&client_id);
-		self.output.insert(0, format!("{}", err.message));
+		self.output = format!("{}", err.message);
 		Ok(())
 	}
 	fn lsp_response(
@@ -585,10 +581,10 @@ impl Server {
 									MarkedString::LanguageString(s) => o.push(s.value.clone()),
 								};
 							}
-							self.output.insert(0, o.join("\n"));
+							self.output = o.join("\n");
 						}
 						HoverContents::Markup(mc) => {
-							self.output.insert(0, mc.value.clone());
+							self.output = mc.value.clone();
 						}
 						_ => panic!("unknown hover response: {:?}", msg),
 					};
@@ -617,7 +613,7 @@ impl Server {
 					msg.sort_by(cmp_location);
 					let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(&x)).collect();
 					if o.len() > 0 {
-						self.output.insert(0, o.join("\n"));
+						self.output = o.join("\n");
 					}
 				}
 			}
@@ -688,7 +684,7 @@ impl Server {
 						}
 					}
 					if o.len() > 0 {
-						self.output.insert(0, o.join("\n"));
+						self.output = o.join("\n");
 					}
 				}
 			}
@@ -700,7 +696,7 @@ impl Server {
 						o.push(sig.label.clone());
 					}
 					if o.len() > 0 {
-						self.output.insert(0, o.join("\n"));
+						self.output = o.join("\n");
 					}
 				}
 			}
@@ -716,7 +712,7 @@ impl Server {
 						o.push(format!("{}", location_to_plumb(&loc)));
 					}
 					if o.len() > 0 {
-						self.output.insert(0, o.join("\n"));
+						self.output = o.join("\n");
 					}
 				}
 			}
@@ -806,8 +802,7 @@ impl Server {
 		match method.as_str() {
 			LogMessage::METHOD => {
 				let msg: LogMessageParams = serde_json::from_str(params.unwrap().get())?;
-				self.output
-					.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
+				self.output = format!("[{:?}] {}", msg.typ, msg.message);
 			}
 			PublishDiagnostics::METHOD => {
 				let msg: PublishDiagnosticsParams = serde_json::from_str(params.unwrap().get())?;
@@ -827,8 +822,7 @@ impl Server {
 			}
 			ShowMessage::METHOD => {
 				let msg: ShowMessageParams = serde_json::from_str(params.unwrap().get())?;
-				self.output
-					.insert(0, format!("[{:?}] {}", msg.typ, msg.message));
+				self.output = format!("[{:?}] {}", msg.typ, msg.message);
 			}
 			Progress::METHOD => {
 				let msg: ProgressParams = serde_json::from_str(params.unwrap().get())?;
