@@ -32,7 +32,8 @@ URIs should look something like `file:///home/user/project`.
 
 Here's an example file for `rust-analyzer` and `gopls`:
 
-```[servers.rust-analyzer]
+```
+[servers.rust-analyzer]
 files = "\\.rs$"
 workspace_folders = [
 	"file:///home/username/some-project",
