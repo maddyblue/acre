@@ -569,9 +569,16 @@ impl Server {
 			.requests
 			.remove(&client_id)
 			.expect(&format!("expected client id {:?}", client_id));
+		let result = match result {
+			Some(v) => v,
+			None => {
+				self.output = "null".into();
+				return Ok(());
+			}
+		};
 		match typ.as_str() {
 			Initialize::METHOD => {
-				let msg = serde_json::from_str::<InitializeResult>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<InitializeResult>(result.get())?;
 				self.send_notification::<Initialized>(
 					&client_id.client_name,
 					InitializedParams {},
@@ -581,14 +588,13 @@ impl Server {
 				self.sync_windows()?;
 			}
 			GotoDefinition::METHOD => {
-				let msg =
-					serde_json::from_str::<Option<GotoDefinitionResponse>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<GotoDefinitionResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					goto_definition(&msg)?;
 				}
 			}
 			HoverRequest::METHOD => {
-				let msg = serde_json::from_str::<Option<Hover>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<Hover>>(result.get())?;
 				if let Some(msg) = msg {
 					match &msg.contents {
 						HoverContents::Array(mss) => {
@@ -609,8 +615,7 @@ impl Server {
 				}
 			}
 			Completion::METHOD => {
-				let msg =
-					serde_json::from_str::<Option<CompletionResponse>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<CompletionResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					self.actions.clear();
 					let actions = match msg {
@@ -626,7 +631,7 @@ impl Server {
 				}
 			}
 			References::METHOD => {
-				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.get())?;
 				if let Some(mut msg) = msg {
 					msg.sort_by(cmp_location);
 					let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(&x)).collect();
@@ -636,8 +641,7 @@ impl Server {
 				}
 			}
 			DocumentSymbolRequest::METHOD => {
-				let msg =
-					serde_json::from_str::<Option<DocumentSymbolResponse>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<DocumentSymbolResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					let mut o: Vec<String> = vec![];
 					fn add_symbol(
@@ -707,7 +711,7 @@ impl Server {
 				}
 			}
 			SignatureHelpRequest::METHOD => {
-				let msg = serde_json::from_str::<Option<SignatureHelp>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<SignatureHelp>>(result.get())?;
 				if let Some(msg) = msg {
 					let mut o: Vec<String> = vec![];
 					for sig in &msg.signatures {
@@ -719,7 +723,7 @@ impl Server {
 				}
 			}
 			CodeLensRequest::METHOD => {
-				let msg = serde_json::from_str::<Option<Vec<CodeLens>>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<Vec<CodeLens>>>(result.get())?;
 				if let Some(msg) = msg {
 					let mut o: Vec<String> = vec![];
 					for lens in msg {
@@ -735,11 +739,7 @@ impl Server {
 				}
 			}
 			CodeActionRequest::METHOD => {
-				if result.is_none() {
-					return Ok(());
-				}
-				let msg =
-					serde_json::from_str::<Option<CodeActionResponse>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<CodeActionResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					if self.autorun.remove_entry(&client_id.msg_id).is_some() {
 						for m in msg.iter().cloned() {
@@ -756,7 +756,7 @@ impl Server {
 				}
 			}
 			Formatting::METHOD => {
-				let msg = serde_json::from_str::<Option<Vec<TextEdit>>>(result.unwrap().get())?;
+				let msg = serde_json::from_str::<Option<Vec<TextEdit>>>(result.get())?;
 				if let Some(msg) = msg {
 					self.apply_text_edits(&url, InsertTextFormat::PlainText, &msg)?;
 					// Run any on put actions.
@@ -792,17 +792,13 @@ impl Server {
 				}
 			}
 			GotoImplementation::METHOD => {
-				let msg = serde_json::from_str::<Option<GotoImplementationResponse>>(
-					result.unwrap().get(),
-				)?;
+				let msg = serde_json::from_str::<Option<GotoImplementationResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					goto_definition(&msg)?;
 				}
 			}
 			GotoTypeDefinition::METHOD => {
-				let msg = serde_json::from_str::<Option<GotoTypeDefinitionResponse>>(
-					result.unwrap().get(),
-				)?;
+				let msg = serde_json::from_str::<Option<GotoTypeDefinitionResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					goto_definition(&msg)?;
 				}
