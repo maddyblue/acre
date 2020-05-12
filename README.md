@@ -32,13 +32,13 @@ URIs should look something like `file:///home/user/project`.
 
 Here's an example file for `rust-analyzer` and `gopls`:
 
-```[servers.rust-analyzer]
+```
+[servers.rust-analyzer]
 files = "\\.rs$"
 workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
 ]
-format_on_put = false
 
 [servers.gopls]
 files = '\.go$'
@@ -51,11 +51,10 @@ This will execute the `rust-analyzer-linux` binary and associate it with all fil
 Options to pass to each server can be added:
 
 ```
-[[servers]]
-name = "some-server"
+[servers.name]
 files = '\.ext$'
 root_uri = "file:///home/username/project"
-[servers.options]
+[servers.name.options]
 enableSomething = true
 hoverMode = "OneLine"
 ```
