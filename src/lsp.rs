@@ -103,7 +103,12 @@ impl Client {
 			root_path: None,
 			root_uri,
 			initialization_options: options,
-			capabilities: ClientCapabilities::default(),
+			capabilities: ClientCapabilities {
+				window: Some(WindowClientCapabilities {
+					work_done_progress: Some(true),
+				}),
+				..Default::default()
+			},
 			trace: None,
 			workspace_folders,
 			client_info: None,
