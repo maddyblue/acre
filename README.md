@@ -60,7 +60,7 @@ hoverMode = "OneLine"
 
 # Disable checkOnSave in rust-analyzer:
 [servers.rust-analyzer.options]
-checkOnSave = false
+checkOnSave.enable = false
 ```
 
 # Tested servers
