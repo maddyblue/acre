@@ -1,9 +1,9 @@
-use acre::{acme::*, err_str, lsp, plumb};
 use crossbeam_channel::{bounded, Receiver, Select};
 use diff;
 use lazy_static::lazy_static;
 use lsp_types::{notification::*, request::*, *};
 use nine::p2000::OpenMode;
+use plan9::{acme::*, err_str, lsp, plumb};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
