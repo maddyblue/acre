@@ -1282,6 +1282,8 @@ impl Server {
         Ok(())
     }
     fn wait(&mut self) -> Result<()> {
+        let (sync_s, sync_r) = bounded(1);
+
         self.sync_windows()?;
         // chan index -> (recv chan, self.clients index)
 
@@ -1290,6 +1292,7 @@ impl Server {
         let sel_log_r = sel.recv(&self.log_r);
         let sel_ev_r = sel.recv(&self.ev_r);
         let sel_err_r = sel.recv(&self.err_r);
+        let sel_sync_r = sel.recv(&sync_r);
         let mut clients = HashMap::new();
 
         for (name, c) in &self.clients {
@@ -1297,17 +1300,14 @@ impl Server {
         }
         drop(sel);
 
-        let mut no_sync = false;
         loop {
-            if !no_sync {
-                self.sync()?;
-            }
-            no_sync = false;
+            let mut no_sync = false;
 
             let mut sel = Select::new();
             sel.recv(&self.log_r);
             sel.recv(&self.ev_r);
             sel.recv(&self.err_r);
+            sel.recv(&sync_r);
             for (_, c) in &self.clients {
                 sel.recv(&c.msg_r);
             }
@@ -1362,12 +1362,24 @@ impl Server {
                         }
                     }
                 }
+                _ if index == sel_sync_r => {
+                    no_sync = true;
+                    let _ = sync_r.recv();
+                    self.sync()?;
+                }
                 _ => {
                     let (ch, name) = clients.get(&index).unwrap();
                     let msg = ch.recv()?;
                     self.lsp_msg(name.to_string(), msg)?;
                 }
             };
+
+            // Only send a sync message if the channel is empty. If a bunch of LSP messages
+            // arrive (like window progress updatets), they don't each have to wait for a
+            // full sync before beingc processed.
+            if !no_sync && sync_s.is_empty() {
+                sync_s.send(())?;
+            }
         }
         Ok(())
     }
