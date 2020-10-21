@@ -10,6 +10,7 @@ documentation = "https://docs.rs/plan9"
 keywords = ["plan9port", "acme"]
 
 [dependencies]
+anyhow = "1"
 byteorder = "1"
 crossbeam-channel = "0.4"
 lazy_static = "1"
