@@ -1314,42 +1314,54 @@ impl Server {
             let index = sel.ready();
 
             match index {
-                _ if index == sel_log_r => match self.log_r.recv() {
-                    Ok(ev) => match ev.op.as_str() {
-                        "focus" => {
-                            self.focus = ev.name;
+                _ if index == sel_log_r => {
+                    let msg = self.log_r.recv();
+                    println!("log {:?}", msg);
+                    match msg {
+                        Ok(ev) => match ev.op.as_str() {
+                            "focus" => {
+                                self.focus = ev.name;
+                            }
+                            "put" => {
+                                self.cmd_put(ev.id)?;
+                                no_sync = true;
+                            }
+                            "new" | "del" => {
+                                self.sync_windows()?;
+                            }
+                            _ => {
+                                panic!("unknown event op {:?}", ev);
+                            }
+                        },
+                        Err(_) => {
+                            break;
                         }
-                        "put" => {
-                            self.cmd_put(ev.id)?;
-                            no_sync = true;
+                    }
+                }
+                _ if index == sel_ev_r => {
+                    let msg = self.ev_r.recv();
+                    println!("ev {:?}", msg);
+                    match msg {
+                        Ok(ev) => {
+                            self.run_cmd(ev)?;
                         }
-                        "new" | "del" => {
-                            self.sync_windows()?;
+                        Err(_) => {
+                            break;
                         }
-                        _ => {
-                            panic!("unknown event op {:?}", ev);
+                    }
+                }
+                _ if index == sel_err_r => {
+                    let msg = self.err_r.recv();
+                    println!("err {:?}", msg);
+                    match msg {
+                        Ok(_) => {
+                            break;
                         }
-                    },
-                    Err(_) => {
-                        break;
+                        Err(_) => {
+                            break;
+                        }
                     }
-                },
-                _ if index == sel_ev_r => match self.ev_r.recv() {
-                    Ok(ev) => {
-                        self.run_cmd(ev)?;
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                },
-                _ if index == sel_err_r => match self.err_r.recv() {
-                    Ok(_) => {
-                        break;
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                },
+                }
                 _ => {
                     let (ch, name) = clients.get(&index).unwrap();
                     let msg = ch.recv()?;

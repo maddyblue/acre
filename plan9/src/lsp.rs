@@ -78,7 +78,7 @@ impl Client {
             let mut v = vec![0u8; content_len];
             stdout.read_exact(&mut v).unwrap();
             if cfg!(debug_assertions) {
-                println!("got: {}", std::str::from_utf8(&v).unwrap());
+                //println!("got: {}", std::str::from_utf8(&v).unwrap());
             }
             msg_s.send(v).unwrap();
         });
@@ -126,7 +126,7 @@ impl Client {
         };
         let s = serde_json::to_string(&msg)?;
         if cfg!(debug_assertions) {
-            println!("send request: {}", s);
+            //println!("send request: {}", s);
         }
         let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
         write!(self.stdin, "{}", s)?;
@@ -140,7 +140,7 @@ impl Client {
         };
         let s = serde_json::to_string(&msg)?;
         if cfg!(debug_assertions) {
-            println!("send notification: {}", msg.method);
+            //println!("send notification: {}", msg.method);
         }
         let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
         write!(self.stdin, "{}", s)?;
