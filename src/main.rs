@@ -29,7 +29,7 @@ struct ConfigServer {
     root_uri: Option<String>,
     workspace_folders: Option<Vec<String>>,
     options: Option<Value>,
-    actions_on_put: Option<Vec<String>>,
+    actions_on_put: Option<Vec<CodeActionKind>>,
     format_on_put: Option<bool>,
 }
 
@@ -377,10 +377,10 @@ impl Server {
             if caps.completion_provider.is_some() {
                 body.push_str("[complete] ");
             }
-            if caps.definition_provider.unwrap_or(false) {
+            if caps.definition_provider.is_some() {
                 body.push_str("[definition] ");
             }
-            if caps.hover_provider.unwrap_or(false) {
+            if caps.hover_provider.is_some() {
                 body.push_str("[hover] ");
             }
             if caps.implementation_provider.is_some() {
@@ -392,10 +392,10 @@ impl Server {
                     body.push_str("[lens] ");
                 }
             }
-            if caps.references_provider.unwrap_or(false) {
+            if caps.references_provider.is_some() {
                 body.push_str("[references] ");
             }
-            if caps.document_symbol_provider.unwrap_or(false) {
+            if caps.document_symbol_provider.is_some() {
                 body.push_str("[symbols] ");
             }
             if caps.signature_help_provider.is_some() {
@@ -1247,6 +1247,7 @@ impl Server {
             client_name,
             DidSaveTextDocumentParams {
                 text_document: text_document.clone(),
+                text: None,
             },
         )?;
         let capabilities = self.capabilities.get(client_name).unwrap();
@@ -1257,7 +1258,7 @@ impl Server {
             .unwrap()
             .format_on_put
             .unwrap_or(true)
-            && capabilities.document_formatting_provider.unwrap_or(false)
+            && capabilities.document_formatting_provider.is_some()
         {
             self.send_request::<Formatting>(
                 client_name,
