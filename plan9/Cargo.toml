@@ -1,7 +1,7 @@
 [package]
 name = "plan9"
 description = "Plan9 interaction, based on github.com/9fans/go"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Matt Jibson <matt.jibson@gmail.com>"]
 edition = "2018"
 license = "Apache-2.0"
