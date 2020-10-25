@@ -15,7 +15,9 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use plan9::{acme::*, lsp, plumb};
+use plan9::{acme::*, plumb};
+
+mod lsp;
 
 #[derive(Deserialize)]
 struct TomlConfig {
