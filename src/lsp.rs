@@ -146,10 +146,6 @@ impl Client {
         write!(self.stdin, "{}", s)?;
         Ok(())
     }
-    pub fn wait(&mut self) -> Result<()> {
-        self.proc.wait()?;
-        Ok(())
-    }
     fn new_id(&mut self) -> Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
