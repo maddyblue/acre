@@ -250,7 +250,7 @@ impl Win {
         let cmd = if sure { "delete" } else { "del" };
         self.ctl(cmd)
     }
-    pub fn read_addr(&mut self) -> Result<(usize, usize)> {
+    pub fn read_addr(&mut self) -> Result<(u32, u32)> {
         let mut buf: [u8; 40] = [0; 40];
         let f = self.fid(File::Addr);
         f.seek(SeekFrom::Start(0))?;
@@ -308,8 +308,8 @@ impl Event {
 
 #[derive(Debug)]
 pub struct NlOffsets {
-    nl: Vec<u64>,
-    leftover: u64,
+    nl: Vec<u32>,
+    leftover: u32,
 }
 
 impl NlOffsets {
@@ -325,7 +325,7 @@ impl NlOffsets {
             if sz == 0 {
                 break;
             }
-            let n = std::str::from_utf8(&line)?.chars().count() as u64;
+            let n = std::str::from_utf8(&line)?.chars().count() as u32;
             let last: u8 = *line.last().unwrap();
             if last != '\n' as u8 {
                 leftover = n;
@@ -337,19 +337,19 @@ impl NlOffsets {
         Ok(NlOffsets { nl, leftover })
     }
     // returns line, col
-    pub fn offset_to_line(&self, offset: u64) -> (u64, u64) {
+    pub fn offset_to_line(&self, offset: u32) -> (u32, u32) {
         for (i, o) in self.nl.iter().enumerate() {
             if *o > offset {
-                return (i as u64 - 1, offset - self.nl[i - 1]);
+                return (i as u32 - 1, offset - self.nl[i - 1]);
             }
         }
         let i = self.nl.len() - 1;
         if offset >= self.nl[i] {
-            return (i as u64, offset - self.nl[i]);
+            return (i as u32, offset - self.nl[i]);
         }
         panic!("unreachable");
     }
-    pub fn line_to_offset(&self, line: u64, col: u64) -> u64 {
+    pub fn line_to_offset(&self, line: u32, col: u32) -> u32 {
         let line = line as usize;
         let eof = self.nl[self.nl.len() - 1] + self.leftover;
         if line >= self.nl.len() {
@@ -363,11 +363,11 @@ impl NlOffsets {
         o
     }
     // returns the position of the last character in the file.
-    pub fn last(&self) -> (u64, u64) {
+    pub fn last(&self) -> (u32, u32) {
         if self.nl.is_empty() {
             (0, self.leftover)
         } else {
-            (self.nl.len() as u64 - 1, self.leftover)
+            (self.nl.len() as u32 - 1, self.leftover)
         }
     }
 }

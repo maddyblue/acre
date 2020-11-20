@@ -59,7 +59,7 @@ fn main() -> Result<()> {
 
 struct WDProgress {
     name: String,
-    percentage: Option<f64>,
+    percentage: Option<u32>,
     message: Option<String>,
     title: String,
 }
@@ -67,7 +67,7 @@ struct WDProgress {
 impl WDProgress {
     fn new(
         name: String,
-        percentage: Option<f64>,
+        percentage: Option<u32>,
         message: Option<String>,
         title: Option<String>,
     ) -> Self {
@@ -155,25 +155,26 @@ struct Server {
 
 struct ServerWin {
     w: Win,
-    doc: TextDocumentIdentifier,
+    doc: VersionedTextDocumentIdentifier,
     url: Url,
-    version: i64,
+    version: i32,
     client: String,
 }
 
 impl ServerWin {
     fn new(name: String, w: Win, client: String) -> Result<ServerWin> {
         let url = Url::parse(&format!("file://{}", name))?;
-        let doc = TextDocumentIdentifier::new(url.clone());
+        let version = 1;
+        let doc = VersionedTextDocumentIdentifier::new(url.clone(), version);
         Ok(ServerWin {
             w,
             doc,
             url,
-            version: 1,
+            version,
             client,
         })
     }
-    fn pos(&mut self) -> Result<(usize, usize)> {
+    fn pos(&mut self) -> Result<(u32, u32)> {
         self.w.ctl("addr=dot")?;
         // TODO: convert these character (rune) offsets to byte offsets.
         self.w.read_addr()
@@ -184,10 +185,10 @@ impl ServerWin {
     fn position(&mut self) -> Result<Position> {
         let pos = self.pos()?;
         let nl = self.nl()?;
-        let (line, col) = nl.offset_to_line(pos.0 as u64);
+        let (line, col) = nl.offset_to_line(pos.0);
         Ok(Position::new(line, col))
     }
-    fn text(&mut self) -> Result<(i64, String)> {
+    fn text(&mut self) -> Result<(i32, String)> {
         let mut buf = String::new();
         self.w.read(File::Body)?.read_to_string(&mut buf)?;
         self.version += 1;
@@ -204,9 +205,12 @@ impl ServerWin {
             }],
         })
     }
+    fn doc_ident(&self) -> TextDocumentIdentifier {
+        TextDocumentIdentifier::new(self.url.clone())
+    }
     fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
         let pos = self.position()?;
-        Ok(TextDocumentPositionParams::new(self.doc.clone(), pos))
+        Ok(TextDocumentPositionParams::new(self.doc_ident(), pos))
     }
 }
 
@@ -526,7 +530,7 @@ impl Server {
         let to_close: Vec<(String, TextDocumentIdentifier)> = self
             .ws
             .iter()
-            .map(|(_, w)| (w.client.clone(), w.doc.clone()))
+            .map(|(_, w)| (w.client.clone(), w.doc_ident()))
             .collect();
         for (client_name, text_document) in to_close {
             self.send_notification::<DidCloseTextDocument>(
@@ -1242,13 +1246,14 @@ impl Server {
             return Ok(());
         };
         let client_name = &sw.client.clone();
-        let text_document = sw.doc.clone();
+        let text_document = sw.doc_ident();
+        let versioned_document = sw.doc.clone();
         let url = sw.url.clone();
         drop(sw);
         self.send_notification::<DidSaveTextDocument>(
             client_name,
             DidSaveTextDocumentParams {
-                text_document: text_document.clone(),
+                text_document: versioned_document,
                 text: None,
             },
         )?;
@@ -1426,9 +1431,9 @@ fn plumb_location(loc: String) -> Result<()> {
     return msg.send(f);
 }
 
-fn format_pct(pct: Option<f64>) -> String {
+fn format_pct(pct: Option<u32>) -> String {
     match pct {
-        Some(v) => format!("{:.0}", v),
+        Some(v) => format!("{}", v),
         None => "?".to_string(),
     }
 }
