@@ -106,7 +106,8 @@ impl Client {
             initialization_options: options,
             capabilities: ClientCapabilities {
                 window: Some(WindowClientCapabilities {
-                    work_done_progress: Some(true),
+                    //work_done_progress: Some(true),
+                    work_done_progress: Some(false),
                 }),
                 ..Default::default()
             },
