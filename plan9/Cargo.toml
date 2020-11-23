@@ -14,8 +14,5 @@ anyhow = "1"
 byteorder = "1"
 crossbeam-channel = "0.4"
 lazy_static = "1"
-lsp-types = "0.82"
 nine = "0.5"
 regex = "1"
-serde_json = { version = "1", features = ["raw_value"] }
-serde = { version = "1.0", features = ["derive"] }

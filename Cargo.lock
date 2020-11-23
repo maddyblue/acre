@@ -8,7 +8,7 @@ dependencies = [
  "crossbeam-channel",
  "diff",
  "lazy_static",
- "lsp-types 0.83.1",
+ "lsp-types",
  "nine",
  "plan9",
  "regex",
@@ -194,20 +194,6 @@ checksum = "4d58d1b70b004888f764dfbf6a26a3b0342a1632d33968e4a179d8011c760614"
 
 [[package]]
 name = "lsp-types"
-version = "0.82.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db895abb8527cf59e3de893ab2acf52cf904faeb65e60ea6f373e11fe86464e8"
-dependencies = [
- "base64",
- "bitflags",
- "serde",
- "serde_json",
- "serde_repr",
- "url",
-]
-
-[[package]]
-name = "lsp-types"
 version = "0.83.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4e79f39834b97271f9f5ecec573e42c7d9c5bdbd2620b30a851054ece6aab6d"
@@ -281,11 +267,8 @@ dependencies = [
  "byteorder",
  "crossbeam-channel",
  "lazy_static",
- "lsp-types 0.82.0",
  "nine",
  "regex",
- "serde",
- "serde_json",
 ]
 
 [[package]]
