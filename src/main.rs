@@ -155,7 +155,6 @@ struct Server {
 
 struct ServerWin {
     w: Win,
-    doc: VersionedTextDocumentIdentifier,
     url: Url,
     version: i32,
     client: String,
@@ -165,10 +164,8 @@ impl ServerWin {
     fn new(name: String, w: Win, client: String) -> Result<ServerWin> {
         let url = Url::parse(&format!("file://{}", name))?;
         let version = 1;
-        let doc = VersionedTextDocumentIdentifier::new(url.clone(), version);
         Ok(ServerWin {
             w,
-            doc,
             url,
             version,
             client,
@@ -1247,13 +1244,12 @@ impl Server {
         };
         let client_name = &sw.client.clone();
         let text_document = sw.doc_ident();
-        let versioned_document = sw.doc.clone();
         let url = sw.url.clone();
         drop(sw);
         self.send_notification::<DidSaveTextDocument>(
             client_name,
             DidSaveTextDocumentParams {
-                text_document: versioned_document,
+                text_document: text_document.clone(),
                 text: None,
             },
         )?;
