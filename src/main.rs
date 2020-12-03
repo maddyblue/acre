@@ -970,6 +970,9 @@ impl Server {
         Ok(())
     }
     fn did_change(&mut self, wid: usize) -> Result<()> {
+        // Sometimes we are sending a DidChange before a DidOpen. Maybe this is because
+        // acme's event log sometimes misses events. Sync the windows just to be sure.
+        self.sync_windows()?;
         let sw = match self.ws.get_mut(&wid) {
             Some(sw) => sw,
             // Ignore untracked windows.
