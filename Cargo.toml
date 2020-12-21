@@ -11,7 +11,7 @@ anyhow = "1"
 crossbeam-channel = "0.4"
 diff = "0.1"
 lazy_static = "1"
-lsp-types = "0.85"
+lsp-types = "0.86"
 nine = "0.5"
 plan9 = { path = "plan9" }
 regex = "1"

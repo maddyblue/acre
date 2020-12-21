@@ -108,12 +108,15 @@ impl Client {
                 window: Some(WindowClientCapabilities {
                     //work_done_progress: Some(true),
                     work_done_progress: Some(false),
+                    show_message: None,
+                    show_document: None,
                 }),
                 ..Default::default()
             },
             trace: None,
             workspace_folders,
             client_info: None,
+            locale: None,
         })?;
         Ok((c, id))
     }

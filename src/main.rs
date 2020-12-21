@@ -883,10 +883,23 @@ impl Server {
             match doc_changes {
                 DocumentChanges::Edits(edits) => {
                     for edit in edits {
+                        let text_edits = edit
+                            .edits
+                            .iter()
+                            .filter_map(|e| {
+                                match e {
+                                    // A TextEdit, keep it.
+                                    OneOf::Left(e) => Some(e),
+                                    // A AnnotatedTextEdit, discard until we support it.
+                                    _ => None,
+                                }
+                            })
+                            .cloned()
+                            .collect();
                         self.apply_text_edits(
                             &edit.text_document.uri,
                             InsertTextFormat::PlainText,
-                            &edit.edits,
+                            &text_edits,
                         )?;
                     }
                 }
@@ -1185,6 +1198,10 @@ impl Server {
                     match edit {
                         CompletionTextEdit::Edit(edit) => {
                             return self.apply_text_edits(&url, format, &vec![edit])
+                        }
+                        CompletionTextEdit::InsertAndReplace(_) => {
+                            println!("InsertAndReplace not supported");
+                            return Ok(());
                         }
                     }
                 }
