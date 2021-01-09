@@ -139,6 +139,9 @@ struct Server {
     // Vec of position and (ClientId, index) into the vec of actions.
     action_addrs: Vec<(usize, (ClientId, usize))>,
 
+    // current window info
+    current_hover: Option<String>,
+
     log_r: Receiver<LogEvent>,
     ev_r: Receiver<Event>,
     err_r: Receiver<Error>,
@@ -256,6 +259,7 @@ impl Server {
             actions: HashMap::new(),
             action_addrs: vec![],
             diags: HashMap::new(),
+            current_hover: None,
             log_r,
             ev_r,
             err_r,
@@ -331,15 +335,16 @@ impl Server {
             .unwrap();
         Ok(s)
     }
-    fn get_sw_by_url(&mut self, url: &Url) -> Result<&mut ServerWin> {
-        let filename = url.path();
-        let mut wid: Option<usize> = None;
+    fn winid_by_name(&self, filename: &str) -> Option<usize> {
         for (name, id) in &self.names {
             if filename == name {
-                wid = Some(*id);
-                break;
+                return Some(*id);
             }
         }
+        None
+    }
+    fn get_sw_by_name(&mut self, filename: &str) -> Result<&mut ServerWin> {
+        let wid = self.winid_by_name(filename);
         let wid = match wid {
             Some(id) => id,
             None => bail!("could not find file {}", filename),
@@ -350,8 +355,15 @@ impl Server {
         };
         Ok(sw)
     }
+    fn get_sw_by_url(&mut self, url: &Url) -> Result<&mut ServerWin> {
+        let filename = url.path();
+        self.get_sw_by_name(filename)
+    }
     fn sync(&mut self) -> Result<()> {
         let mut body = String::new();
+        if let Some(hover) = &self.current_hover {
+            write!(&mut body, "{}\n\n----\n\n", hover)?;
+        }
         for (_, ds) in &self.diags {
             for d in ds {
                 write!(&mut body, "{}\n", d)?;
@@ -382,9 +394,6 @@ impl Server {
             }
             if caps.definition_provider.is_some() {
                 body.push_str("[definition] ");
-            }
-            if caps.hover_provider.is_some() {
-                body.push_str("[hover] ");
             }
             if caps.implementation_provider.is_some() {
                 body.push_str("[impl] ");
@@ -608,10 +617,10 @@ impl Server {
                                     MarkedString::LanguageString(s) => o.push(s.value.clone()),
                                 };
                             }
-                            self.output = o.join("\n");
+                            self.current_hover = Some(o.join("\n"));
                         }
                         HoverContents::Markup(mc) => {
-                            self.output = mc.value.clone();
+                            self.current_hover = Some(mc.value.clone());
                         }
                         _ => panic!("unknown hover response: {:?}", msg),
                     };
@@ -995,6 +1004,27 @@ impl Server {
         let params = sw.change_params()?;
         self.send_notification::<DidChangeTextDocument>(&client, params)
     }
+    fn set_focus(&mut self, ev: LogEvent) -> Result<()> {
+        self.focus = ev.name.clone();
+
+        let sw = self.get_sw_by_name(&ev.name)?;
+        let client_name = &sw.client.clone();
+        let url = sw.url.clone();
+        let text_document_position_params = sw.text_doc_pos()?;
+        let work_done_progress_params = WorkDoneProgressParams {
+            work_done_token: None,
+        };
+        drop(sw);
+        self.send_request::<HoverRequest>(
+            &client_name,
+            url,
+            HoverParams {
+                text_document_position_params,
+                work_done_progress_params,
+            },
+        )?;
+        Ok(())
+    }
     fn run_event(&mut self, ev: Event, wid: usize) -> Result<()> {
         self.did_change(wid)?;
         let sw = self.ws.get_mut(&wid).unwrap();
@@ -1023,16 +1053,6 @@ impl Server {
                         text_document_position_params,
                         work_done_progress_params,
                         partial_result_params,
-                    },
-                )?;
-            }
-            "hover" => {
-                self.send_request::<HoverRequest>(
-                    client_name,
-                    url,
-                    HoverParams {
-                        text_document_position_params,
-                        work_done_progress_params,
                     },
                 )?;
             }
@@ -1343,7 +1363,7 @@ impl Server {
                     match msg {
                         Ok(ev) => match ev.op.as_str() {
                             "focus" => {
-                                self.focus = ev.name;
+                                let _ = self.set_focus(ev);
                             }
                             "put" => {
                                 self.cmd_put(ev.id)?;
