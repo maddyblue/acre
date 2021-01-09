@@ -1010,8 +1010,10 @@ impl Server {
         let sw = self.get_sw_by_name(&ev.name)?;
         let client_name = &sw.client.clone();
         let url = sw.url.clone();
+        let wid = sw.w.id();
         let text_document_position_params = sw.text_doc_pos()?;
         drop(sw);
+        self.did_change(wid)?;
         self.send_request::<HoverRequest>(
             &client_name,
             url,
