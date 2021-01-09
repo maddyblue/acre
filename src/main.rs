@@ -1011,9 +1011,6 @@ impl Server {
         let client_name = &sw.client.clone();
         let url = sw.url.clone();
         let text_document_position_params = sw.text_doc_pos()?;
-        let work_done_progress_params = WorkDoneProgressParams {
-            work_done_token: None,
-        };
         drop(sw);
         self.send_request::<HoverRequest>(
             &client_name,
@@ -1033,12 +1030,6 @@ impl Server {
         let text_document_position_params = sw.text_doc_pos()?;
         let text_document_position = text_document_position_params.clone();
         let text_document = TextDocumentIdentifier::new(url.clone());
-        let work_done_progress_params = WorkDoneProgressParams {
-            work_done_token: None,
-        };
-        let partial_result_params = PartialResultParams {
-            partial_result_token: None,
-        };
         let range = Range {
             start: text_document_position.position,
             end: text_document_position.position,
@@ -1494,3 +1485,12 @@ fn cmp_position(a: &Position, b: &Position) -> Ordering {
     }
     return a.character.cmp(&b.character);
 }
+
+#[allow(non_upper_case_globals)]
+const work_done_progress_params: WorkDoneProgressParams = WorkDoneProgressParams {
+    work_done_token: None,
+};
+#[allow(non_upper_case_globals)]
+const partial_result_params: PartialResultParams = PartialResultParams {
+    partial_result_token: None,
+};
