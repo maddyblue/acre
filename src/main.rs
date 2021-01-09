@@ -1231,6 +1231,7 @@ impl Server {
                     self.output.clear();
                     self.sync_windows()?;
                     self.diags.clear();
+                    self.current_hover = None;
                 }
                 _ => {
                     panic!("unexpected");
