@@ -1,14 +1,14 @@
 use std::env;
 use std::os::unix::net::UnixStream;
 
-use anyhow::Result;
+use anyhow::{Result, Context};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{conn::Conn, fid, fsys};
 
 pub fn dial(addr: &str) -> Result<Conn> {
-    let stream = UnixStream::connect(addr)?;
+    let stream = UnixStream::connect(addr).with_context(|| format!("dial addr={}", addr))?;
     Conn::new(stream)
 }
 
@@ -42,5 +42,8 @@ pub fn namespace() -> String {
     if let Some(m) = DOT_ZERO.captures(disp.as_str()) {
         disp = m.get(1).unwrap().as_str().to_string();
     }
+    // Turn /tmp/launch/:0 into _tmp_launch_:0 (OS X 10.5).
+	disp = disp.replace("/", "_");
+
     format!("/tmp/ns.{}.{}", env::var("USER").unwrap(), disp)
 }
