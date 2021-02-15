@@ -378,7 +378,7 @@ impl Server {
             write!(
                 &mut body,
                 "{}{}\n\t",
-                if *file_name == self.focus { "*" } else { "" },
+                if *file_name == self.focus { "*" } else { " " },
                 file_name
             )?;
             let client_name = self.files.get(file_name).unwrap();
