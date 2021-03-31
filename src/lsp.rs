@@ -56,6 +56,7 @@ impl Client {
             loop {
                 line.clear();
                 stdout.read_line(&mut line).unwrap();
+                println!("LINE {}", line);
                 if line.trim().len() == 0 {
                     break;
                 }
@@ -78,7 +79,7 @@ impl Client {
             let mut v = vec![0u8; content_len];
             stdout.read_exact(&mut v).unwrap();
             if cfg!(debug_assertions) {
-                //println!("got: {}", std::str::from_utf8(&v).unwrap());
+                println!("got: {}", std::str::from_utf8(&v).unwrap());
             }
             msg_s.send(v).unwrap();
         });
