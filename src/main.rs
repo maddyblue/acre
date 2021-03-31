@@ -27,6 +27,7 @@ struct TomlConfig {
 #[derive(Clone, Deserialize)]
 struct ConfigServer {
     executable: Option<String>,
+    args: Option<Vec<String>>,
     files: String,
     root_uri: Option<String>,
     workspace_folders: Option<Vec<String>>,
@@ -223,7 +224,7 @@ impl Server {
                 name.clone(),
                 server.files,
                 server.executable.unwrap_or(name.clone()),
-                std::iter::empty(),
+                server.args.unwrap_or(vec![]),
                 server.root_uri,
                 server.workspace_folders,
                 server.options,
@@ -674,7 +675,7 @@ impl Server {
                             kind,
                             location_to_plumb(loc),
                         ));
-                    };
+                    }
                     match msg.clone() {
                         DocumentSymbolResponse::Flat(sis) => {
                             for si in sis {
@@ -713,7 +714,7 @@ impl Server {
                                         process(url, o, &parents, &mut children);
                                     }
                                 }
-                            };
+                            }
                             process(&url, &mut o, &vec![], &mut dss);
                         }
                     }
@@ -878,7 +879,7 @@ impl Server {
                 }
             }
             _ => {
-                panic!("unrecognized method: {}", method);
+                println!("unrecognized method: {}", method);
             }
         }
         Ok(())
