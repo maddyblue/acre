@@ -51,7 +51,7 @@ fn main() -> Result<()> {
 	let config = std::fs::read_to_string(config)?;
 	let config: TomlConfig = toml::from_str(&config)?;
 	if config.servers.is_empty() {
-		println!("empty servers in configuration file");
+		eprintln!("empty servers in configuration file");
 		std::process::exit(1);
 	}
 	let mut s = Server::new(config)?;
@@ -278,23 +278,14 @@ impl Server {
 				loop {
 					match log.read() {
 						Ok(ev) => match ev.op.as_str() {
-							"new" | "del" | "focus" | "put" => {
-								if cfg!(debug_assertions) {
-									println!("log reader: {:?}", ev);
+							"new" | "del" | "focus" | "put" => match log_s.send(ev) {
+								Ok(_) => {}
+								Err(err) => {
+									eprintln!("log_s send err {}", err);
+									return;
 								}
-								match log_s.send(ev) {
-									Ok(_) => {}
-									Err(err) => {
-										println!("log_s send err {}", err);
-										return;
-									}
-								}
-							}
-							_ => {
-								if cfg!(debug_assertions) {
-									println!("log reader: {:?} [uncaught]", ev);
-								}
-							}
+							},
+							_ => {}
 						},
 						Err(err) => {
 							err_s1.send(err).unwrap();
@@ -310,7 +301,7 @@ impl Server {
 				let mut ev = match wev.read_event() {
 					Ok(ev) => ev,
 					Err(err) => {
-						println!("read event err {}", err);
+						eprintln!("read event err {}", err);
 						return;
 					}
 				};
@@ -879,13 +870,13 @@ impl Server {
 				}
 			}
 			_ => {
-				println!("unrecognized method: {}", method);
+				eprintln!("unrecognized method: {}", method);
 			}
 		}
 		Ok(())
 	}
 	fn lsp_request(&mut self, msg: lsp::DeMessage) -> Result<()> {
-		println!("unknown request {:?}", msg);
+		eprintln!("unknown request {:?}", msg);
 		Ok(())
 	}
 	fn apply_workspace_edit(&mut self, edit: &WorkspaceEdit) -> Result<()> {
@@ -1192,7 +1183,7 @@ impl Server {
 						match serde_json::from_value::<ArgWorkspaceEdit>(arg) {
 							Ok(v) => self.apply_workspace_edit(&v.workspace_edit)?,
 							Err(err) => {
-								println!("json err {}", err);
+								eprintln!("json err {}", err);
 								continue;
 							}
 						}
@@ -1214,7 +1205,7 @@ impl Server {
 							return self.apply_text_edits(&url, format, &vec![edit])
 						}
 						CompletionTextEdit::InsertAndReplace(_) => {
-							println!("InsertAndReplace not supported");
+							eprintln!("InsertAndReplace not supported");
 							return Ok(());
 						}
 					}
@@ -1354,7 +1345,6 @@ impl Server {
 			match index {
 				_ if index == sel_log_r => {
 					let msg = self.log_r.recv();
-					println!("log {:?}", msg);
 					match msg {
 						Ok(ev) => match ev.op.as_str() {
 							"focus" => {
@@ -1378,7 +1368,6 @@ impl Server {
 				}
 				_ if index == sel_ev_r => {
 					let msg = self.ev_r.recv();
-					println!("ev {:?}", msg);
 					match msg {
 						Ok(ev) => {
 							self.run_cmd(ev)?;
@@ -1390,7 +1379,7 @@ impl Server {
 				}
 				_ if index == sel_err_r => {
 					let msg = self.err_r.recv();
-					println!("err {:?}", msg);
+					eprintln!("err {:?}", msg);
 					match msg {
 						Ok(_) => {
 							break;

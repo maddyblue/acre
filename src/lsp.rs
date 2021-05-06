@@ -77,9 +77,6 @@ impl Client {
 			}
 			let mut v = vec![0u8; content_len];
 			stdout.read_exact(&mut v).unwrap();
-			if cfg!(debug_assertions) {
-				//println!("got: {}", std::str::from_utf8(&v).unwrap());
-			}
 			msg_s.send(v).unwrap();
 		});
 		// TODO: remove the unwrap here. Unsure how to bubble up errors
@@ -129,9 +126,6 @@ impl Client {
 			params,
 		};
 		let s = serde_json::to_string(&msg)?;
-		if cfg!(debug_assertions) {
-			//println!("send request: {}", s);
-		}
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
 		Ok(id)
@@ -143,9 +137,6 @@ impl Client {
 			params,
 		};
 		let s = serde_json::to_string(&msg)?;
-		if cfg!(debug_assertions) {
-			//println!("send notification: {}", msg.method);
-		}
 		let s = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
 		write!(self.stdin, "{}", s)?;
 		Ok(())
@@ -192,23 +183,4 @@ pub struct ResponseError {
 	pub code: i64,
 	pub message: String,
 	pub data: Option<serde_json::Value>,
-}
-
-#[cfg(test)]
-mod tests {
-	use crate::lsp::*;
-
-	#[test]
-	fn lsp() {
-		let (mut l, _) = Client::new(
-			"rls".to_string(),
-			".rs".to_string(),
-			"rls",
-			std::iter::empty(),
-			Some("file:///home/mjibson/go/src/github.com/mjibson/plan9".to_string()),
-			None,
-			None,
-		)
-		.unwrap();
-	}
 }
