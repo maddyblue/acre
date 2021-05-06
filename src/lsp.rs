@@ -210,6 +210,5 @@ mod tests {
             None,
         )
         .unwrap();
-        l.wait().unwrap();
     }
 }
