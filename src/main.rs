@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs::metadata;
 use std::io::Read;
@@ -123,37 +123,39 @@ struct Server {
 	config: TomlConfig,
 	w: Win,
 	ws: HashMap<usize, ServerWin>,
-	// Sorted Vec of (filenames, win id) to know which order to print windows in.
+	/// Sorted Vec of (filenames, win id) to know which order to print windows in.
 	names: Vec<(String, usize)>,
-	// Vec of (position, win id) to map Look locations to windows.
+	/// Vec of (position, win id) to map Look locations to windows.
 	addr: Vec<(usize, usize)>,
+	/// Set of opened files. Needed to distinguish Zerox'd windows.
+	opened_urls: HashSet<Url>,
 
 	body: String,
 	output: String,
 	focus: String,
 	progress: HashMap<String, WDProgress>,
-	// file name -> list of diagnostics
+	/// file name -> list of diagnostics
 	diags: HashMap<String, Vec<String>>,
-	// request (client_name, id) -> (method, file Url)
+	/// request (client_name, id) -> (method, file Url)
 	requests: HashMap<ClientId, (String, Url)>,
 	actions: HashMap<ClientId, Vec<Action>>,
-	// Vec of position and (ClientId, index) into the vec of actions.
+	/// Vec of position and (ClientId, index) into the vec of actions.
 	action_addrs: Vec<(usize, (ClientId, usize))>,
 
-	// current window info
+	/// current window info
 	current_hover: Option<String>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
 	err_r: Receiver<Error>,
 
-	// client name -> client
+	/// client name -> client
 	clients: HashMap<String, lsp::Client>,
-	// client name -> capabilities
+	/// client name -> capabilities
 	capabilities: HashMap<String, lsp_types::ServerCapabilities>,
-	// file name -> client name
+	/// file name -> client name
 	files: HashMap<String, String>,
-	// list of LSP message IDs to auto-run actions
+	/// list of LSP message IDs to auto-run actions
 	autorun: HashMap<usize, ()>,
 }
 
@@ -251,6 +253,7 @@ impl Server {
 			w,
 			ws: HashMap::new(),
 			names: vec![],
+			opened_urls: HashSet::new(),
 			addr: vec![],
 			output: "".to_string(),
 			body: "".to_string(),
@@ -476,7 +479,13 @@ impl Server {
 		let mut ws = HashMap::new();
 		let mut wins = WinInfo::windows()?;
 		self.names.clear();
-		wins.sort_by(|a, b| a.name.cmp(&b.name));
+		wins.sort_by(|a, b| {
+			if a.name != b.name {
+				return a.name.cmp(&b.name);
+			} else {
+				a.id.cmp(&b.id)
+			}
+		});
 		self.files.clear();
 		for wi in wins {
 			let mut client = None;
@@ -506,24 +515,30 @@ impl Server {
 					// call w.events().
 					drop(fsys);
 					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
-					let (version, text) = sw.text()?;
-					self.send_notification::<DidOpenTextDocument>(
-						&sw.client,
-						DidOpenTextDocumentParams {
-							text_document: TextDocumentItem::new(
-								sw.url.clone(),
-								"".to_string(), // lang id
-								version,
-								text,
-							),
-						},
-					)?;
+
+					// Send an open event if this is the first time we've seen this filename (ID
+					// tracking is not enough due to Zerox).
+					if self.opened_urls.insert(sw.url.clone()) {
+						let (version, text) = sw.text()?;
+						self.send_notification::<DidOpenTextDocument>(
+							&sw.client,
+							DidOpenTextDocumentParams {
+								text_document: TextDocumentItem::new(
+									sw.url.clone(),
+									"".to_string(), // lang id
+									version,
+									text,
+								),
+							},
+						)?;
+					}
 
 					sw
 				}
 			};
 			ws.insert(wi.id, w);
 		}
+
 		// close remaining files
 		let to_close: Vec<(String, TextDocumentIdentifier)> = self
 			.ws
@@ -531,6 +546,7 @@ impl Server {
 			.map(|(_, w)| (w.client.clone(), w.doc_ident()))
 			.collect();
 		for (client_name, text_document) in to_close {
+			self.opened_urls.remove(&text_document.uri);
 			self.send_notification::<DidCloseTextDocument>(
 				&client_name,
 				DidCloseTextDocumentParams { text_document },
