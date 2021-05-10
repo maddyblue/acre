@@ -549,7 +549,7 @@ impl Server {
 		} else if msg.id.is_some() && msg.method.is_some() {
 			self.lsp_request(msg)
 		} else if msg.id.is_some() {
-			self.lsp_response(ClientId::new(client_name, msg.id.unwrap()), msg.result)
+			self.lsp_response(ClientId::new(client_name, msg.id.unwrap()), msg, &orig_msg)
 		} else if msg.method.is_some() {
 			self.lsp_notification(client_name, msg.method.unwrap(), msg.params)
 		} else {
@@ -567,16 +567,21 @@ impl Server {
 	fn lsp_response(
 		&mut self,
 		client_id: ClientId,
-		result: Option<Box<serde_json::value::RawValue>>,
+		msg: lsp::DeMessage,
+		orig_msg: &[u8],
 	) -> Result<()> {
 		let (typ, url) = self
 			.requests
 			.remove(&client_id)
 			.expect(&format!("expected client id {:?}", client_id));
-		let result = match result {
+		let result = match msg.result {
 			Some(v) => v,
 			None => {
-				self.output = "null".into();
+				eprintln!(
+					"empty result {:?}, orig msg {:?}",
+					msg,
+					std::str::from_utf8(&orig_msg)
+				);
 				return Ok(());
 			}
 		};
