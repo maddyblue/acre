@@ -593,11 +593,7 @@ impl Server {
 		let result = match msg.result {
 			Some(v) => v,
 			None => {
-				eprintln!(
-					"empty result {:?}, orig msg {:?}",
-					msg,
-					std::str::from_utf8(&orig_msg)
-				);
+				// Ignore empty results. Unsure if/how we should report this to a user.
 				return Ok(());
 			}
 		};
