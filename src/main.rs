@@ -448,7 +448,15 @@ impl Server {
 		self.action_addrs
 			.push((body.len(), (ClientId::new("", 0), 100000)));
 		if !self.output.is_empty() {
-			write!(&mut body, "\n{}\n", self.output)?;
+			// Only take the first 50 lines.
+			let output = self
+				.output
+				.trim()
+				.lines()
+				.take(50)
+				.collect::<Vec<_>>()
+				.join("\n");
+			write!(&mut body, "\n{}\n", output)?;
 		}
 		if self.progress.len() > 0 {
 			body.push('\n');
@@ -845,7 +853,8 @@ impl Server {
 				let msg: PublishDiagnosticsParams = serde_json::from_str(params.unwrap().get())?;
 				let mut v = vec![];
 				let path = msg.uri.path();
-				for p in &msg.diagnostics {
+				// Cap diagnostic length.
+				for p in msg.diagnostics.iter().take(5) {
 					let msg = p.message.lines().next().unwrap_or("");
 					v.push(format!(
 						"{}:{}: [{:?}] {}",
