@@ -584,7 +584,7 @@ impl Server {
 		&mut self,
 		client_id: ClientId,
 		msg: lsp::DeMessage,
-		orig_msg: &[u8],
+		_orig_msg: &[u8],
 	) -> Result<()> {
 		let (typ, url) = self
 			.requests
