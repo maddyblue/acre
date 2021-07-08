@@ -285,8 +285,8 @@ impl Server {
 						Ok(ev) => match ev.op.as_str() {
 							"new" | "del" | "focus" | "put" => match log_s.send(ev) {
 								Ok(_) => {}
-								Err(err) => {
-									eprintln!("log_s send err {}", err);
+								Err(_err) => {
+									//eprintln!("log_s send err {}", _err);
 									return;
 								}
 							},
