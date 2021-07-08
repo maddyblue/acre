@@ -34,6 +34,7 @@ struct ConfigServer {
 	options: Option<Value>,
 	actions_on_put: Option<Vec<CodeActionKind>>,
 	format_on_put: Option<bool>,
+	env: Option<HashMap<String, String>>,
 }
 
 fn main() -> Result<()> {
@@ -227,6 +228,7 @@ impl Server {
 				server.files,
 				server.executable.unwrap_or(name.clone()),
 				server.args.unwrap_or(vec![]),
+				server.env.unwrap_or(HashMap::new()),
 				server.root_uri,
 				server.workspace_folders,
 				server.options,

@@ -27,6 +27,7 @@ Configuration (which servers to run) is handled by a file at `~/.config/acre.tom
 - `options` (optional): list of options to be sent to the server.
 - `format_on_put` (optional): boolean (defaults to true) to run formatting on Put.
 - `actions_on_put` (optional): array of actions (strings) to run on Put. Only useful if `format_on_put` is not false.
+- `env` (optional): table of `key = "value"` pairs to add to the environment for `executable`.
 
 URIs should look something like `file:///home/user/project`.
 
@@ -39,6 +40,9 @@ workspace_folders = [
 	"file:///home/username/some-project",
 	"file:///home/username/other-project",
 ]
+[servers.rust-analyzer.env]
+CARGO_TARGET_DIR = "target-ra"
+RUSTFLAGS = ""
 
 [servers.gopls]
 files = '\.go$'

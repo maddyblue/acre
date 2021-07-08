@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
@@ -25,6 +26,7 @@ impl Client {
 		files: String,
 		program: S,
 		args: I,
+		envs: HashMap<String, String>,
 		root_uri: Option<String>,
 		workspace_folders: Option<Vec<String>>,
 		options: Option<serde_json::Value>,
@@ -37,6 +39,7 @@ impl Client {
 			.args(args)
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())
+			.envs(envs)
 			.spawn()
 			.expect(&format!("could not execute: {}", program));
 		let mut stdout = BufReader::new(proc.stdout.take().unwrap());
