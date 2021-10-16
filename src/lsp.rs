@@ -105,11 +105,28 @@ impl Client {
 			root_uri,
 			initialization_options: options,
 			capabilities: ClientCapabilities {
-				window: Some(WindowClientCapabilities {
-					//work_done_progress: Some(true),
-					work_done_progress: Some(false),
-					show_message: None,
-					show_document: None,
+				text_document: Some(TextDocumentClientCapabilities {
+					code_action: Some(CodeActionClientCapabilities {
+						resolve_support: Some(CodeActionCapabilityResolveSupport {
+							properties: vec!["edit".to_string()],
+						}),
+						code_action_literal_support: Some(CodeActionLiteralSupport {
+							code_action_kind: CodeActionKindLiteralSupport {
+								value_set: vec![
+									"".to_string(),
+									"quickfix".to_string(),
+									"refactor".to_string(),
+									"refactor.extract".to_string(),
+									"refactor.inline".to_string(),
+									"refactor.rewrite".to_string(),
+									"source".to_string(),
+									"source.organizeImports".to_string(),
+								],
+							},
+						}),
+						..Default::default()
+					}),
+					..Default::default()
 				}),
 				..Default::default()
 			},

@@ -139,7 +139,7 @@ struct Server {
 	diags: HashMap<String, Vec<String>>,
 	/// request (client_name, id) -> (method, file Url)
 	requests: HashMap<ClientId, (String, Url)>,
-	actions: HashMap<ClientId, Vec<Action>>,
+	actions: HashMap<ClientId, Vec<(Action, Url)>>,
 	/// Vec of position and (ClientId, index) into the vec of actions.
 	action_addrs: Vec<(usize, (ClientId, usize))>,
 
@@ -383,9 +383,6 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
-			if caps.code_action_provider.is_some() {
-				body.push_str("[assist] ");
-			}
 			if caps.completion_provider.is_some() {
 				body.push_str("[complete] ");
 			}
@@ -419,7 +416,7 @@ impl Server {
 		write!(&mut body, "-----\n")?;
 		self.action_addrs.clear();
 		for (client_id, actions) in &self.actions {
-			for (idx, action) in actions.iter().enumerate() {
+			for (idx, (action, _url)) in actions.iter().enumerate() {
 				self.action_addrs
 					.push((body.len(), (client_id.clone(), idx)));
 				match action {
@@ -655,7 +652,7 @@ impl Server {
 					};
 					let mut v = vec![];
 					for a in actions.iter().cloned() {
-						v.push(Action::Completion(url.clone(), a));
+						v.push((Action::Completion(url.clone(), a), url.clone()));
 					}
 					v.truncate(10);
 					self.actions.insert(client_id, v);
@@ -774,15 +771,25 @@ impl Server {
 				if let Some(msg) = msg {
 					if self.autorun.remove_entry(&client_id.msg_id).is_some() {
 						for m in msg.iter().cloned() {
-							self.run_action(Action::Command(m))?;
+							self.run_action(client_id.clone(), url.clone(), Action::Command(m))?;
 						}
 					} else {
 						self.actions.clear();
 						let mut v = vec![];
 						for m in msg.iter().cloned() {
-							v.push(Action::Command(m));
+							v.push((Action::Command(m), url.clone()));
 						}
 						self.actions.insert(client_id, v);
+					}
+				}
+			}
+			CodeActionResolveRequest::METHOD => {
+				let msg = serde_json::from_str::<Option<CodeAction>>(result.get())?;
+				if let Some(msg) = msg {
+					if let Some(edit) = msg.edit {
+						self.apply_workspace_edit(&edit)?;
+					} else {
+						eprintln!("unexpected CodeActionResolveRequest response: {:#?}", msg);
 					}
 				}
 			}
@@ -1032,14 +1039,33 @@ impl Server {
 		let url = sw.url.clone();
 		let wid = sw.w.id();
 		let text_document_position_params = sw.text_doc_pos()?;
+		let text_document = TextDocumentIdentifier::new(url.clone());
+		let range = Range {
+			start: text_document_position_params.position,
+			end: text_document_position_params.position,
+		};
 		drop(sw);
 		self.did_change(wid)?;
 		self.send_request::<HoverRequest>(
 			&client_name,
-			url,
+			url.clone(),
 			HoverParams {
 				text_document_position_params,
 				work_done_progress_params,
+			},
+		)?;
+		self.send_request::<CodeActionRequest>(
+			client_name,
+			url,
+			CodeActionParams {
+				text_document,
+				range,
+				context: CodeActionContext {
+					diagnostics: vec![],
+					only: None,
+				},
+				work_done_progress_params,
+				partial_result_params,
 			},
 		)?;
 		Ok(())
@@ -1052,10 +1078,6 @@ impl Server {
 		let text_document_position_params = sw.text_doc_pos()?;
 		let text_document_position = text_document_position_params.clone();
 		let text_document = TextDocumentIdentifier::new(url.clone());
-		let range = Range {
-			start: text_document_position.position,
-			end: text_document_position.position,
-		};
 		drop(sw);
 		match ev.text.as_str() {
 			"definition" => {
@@ -1131,22 +1153,6 @@ impl Server {
 					},
 				)?;
 			}
-			"assist" => {
-				self.send_request::<CodeActionRequest>(
-					client_name,
-					url,
-					CodeActionParams {
-						text_document,
-						range,
-						context: CodeActionContext {
-							diagnostics: vec![],
-							only: None,
-						},
-						work_done_progress_params,
-						partial_result_params,
-					},
-				)?;
-			}
 			"impl" => {
 				self.send_request::<GotoImplementation>(
 					client_name,
@@ -1194,11 +1200,11 @@ impl Server {
 		client.notify::<N>(params)
 	}
 	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
-		let action = self.actions.remove(&client_id).unwrap().remove(idx);
+		let (action, url) = self.actions.remove(&client_id).unwrap().remove(idx);
 		self.actions.clear();
-		self.run_action(action)
+		self.run_action(client_id, url, action)
 	}
-	fn run_action(&mut self, action: Action) -> Result<()> {
+	fn run_action(&mut self, client_id: ClientId, url: Url, action: Action) -> Result<()> {
 		match action {
 			Action::Command(CodeActionOrCommand::Command(cmd)) => {
 				if let Some(args) = cmd.arguments {
@@ -1219,8 +1225,14 @@ impl Server {
 				}
 			}
 			Action::Command(CodeActionOrCommand::CodeAction(action)) => {
-				if let Some(edit) = action.edit.clone() {
+				if let Some(edit) = action.edit {
 					self.apply_workspace_edit(&edit)?;
+				} else {
+					let _id = self.send_request::<CodeActionResolveRequest>(
+						&client_id.client_name,
+						url,
+						action,
+					)?;
 				}
 			}
 			Action::Completion(url, item) => {
