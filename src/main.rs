@@ -139,12 +139,9 @@ struct Server {
 	diags: HashMap<String, Vec<String>>,
 	/// request (client_name, id) -> (method, file Url)
 	requests: HashMap<ClientId, (String, Url)>,
-	actions: HashMap<ClientId, Vec<(Action, Url)>>,
-	/// Vec of position and (ClientId, index) into the vec of actions.
-	action_addrs: Vec<(usize, (ClientId, usize))>,
 
 	/// current window info
-	current_hover: Option<String>,
+	current_hover: Option<WindowHover>,
 
 	log_r: Receiver<LogEvent>,
 	ev_r: Receiver<Event>,
@@ -158,6 +155,17 @@ struct Server {
 	files: HashMap<String, String>,
 	/// list of LSP message IDs to auto-run actions
 	autorun: HashMap<usize, ()>,
+}
+
+struct WindowHover {
+	client_name: String,
+	url: Url,
+	hover: Option<String>,
+	actions: Vec<Action>,
+	/// Vec of (position, index) into the vec of actions.
+	action_addrs: Vec<(usize, usize)>,
+
+	body: String,
 }
 
 struct ServerWin {
@@ -262,8 +270,6 @@ impl Server {
 			focus: "".to_string(),
 			progress: HashMap::new(),
 			requests,
-			actions: HashMap::new(),
-			action_addrs: vec![],
 			diags: HashMap::new(),
 			current_hover: None,
 			log_r,
@@ -332,6 +338,47 @@ impl Server {
 			.unwrap();
 		Ok(s)
 	}
+	/// Runs f if self.current_hover is Some and matches the Url, and updates the hover action addrs
+	/// and body.
+	fn set_hover<F: Fn(&mut WindowHover)>(&mut self, url: &Url, f: F) {
+		if let Some(hover) = self.current_hover.as_mut() {
+			if &hover.url == url {
+				f(hover);
+				hover.body.clear();
+				if let Some(text) = &hover.hover {
+					hover.body.push_str(text.trim());
+					hover.body.push_str("\n");
+				}
+
+				hover.action_addrs.clear();
+				for (idx, action) in hover.actions.iter().enumerate() {
+					hover.action_addrs.push((hover.body.len(), idx));
+					let newline = if hover.body.is_empty() { "" } else { "\n" };
+					match action {
+						Action::Command(CodeActionOrCommand::Command(cmd)) => {
+							write!(&mut hover.body, "{}[{}]", newline, cmd.title).unwrap();
+						}
+						Action::Command(CodeActionOrCommand::CodeAction(action)) => {
+							write!(&mut hover.body, "{}[{}]", newline, action.title).unwrap();
+						}
+						Action::Completion(_, item) => {
+							write!(&mut hover.body, "\n[insert] {}:", item.label).unwrap();
+							if item.deprecated.unwrap_or(false) {
+								write!(&mut hover.body, " DEPRECATED").unwrap();
+							}
+							if let Some(k) = item.kind {
+								write!(&mut hover.body, " ({:?})", k).unwrap();
+							}
+							if let Some(d) = &item.detail {
+								write!(&mut hover.body, " {}", d).unwrap();
+							}
+						}
+					}
+				}
+				hover.action_addrs.push((hover.body.len(), 100000));
+			}
+		}
+	}
 	fn winid_by_name(&self, filename: &str) -> Option<usize> {
 		for (name, id) in &self.names {
 			if filename == name {
@@ -359,7 +406,7 @@ impl Server {
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
 		if let Some(hover) = &self.current_hover {
-			write!(&mut body, "{}\n\n----\n\n", hover)?;
+			write!(&mut body, "{}\n----\n", hover.body)?;
 		}
 		for (_, ds) in &self.diags {
 			for d in ds {
@@ -384,7 +431,7 @@ impl Server {
 				None => continue,
 			};
 			if caps.completion_provider.is_some() {
-				body.push_str("[complete] ");
+				//body.push_str("[complete] ");
 			}
 			if caps.definition_provider.is_some() {
 				body.push_str("[definition] ");
@@ -414,36 +461,6 @@ impl Server {
 		}
 		self.addr.push((body.len(), 0));
 		write!(&mut body, "-----\n")?;
-		self.action_addrs.clear();
-		for (client_id, actions) in &self.actions {
-			for (idx, (action, _url)) in actions.iter().enumerate() {
-				self.action_addrs
-					.push((body.len(), (client_id.clone(), idx)));
-				match action {
-					Action::Command(CodeActionOrCommand::Command(cmd)) => {
-						write!(&mut body, "\n[{}]", cmd.title)?;
-					}
-					Action::Command(CodeActionOrCommand::CodeAction(action)) => {
-						write!(&mut body, "\n[{}]", action.title)?;
-					}
-					Action::Completion(_, item) => {
-						write!(&mut body, "\n[insert] {}:", item.label)?;
-						if item.deprecated.unwrap_or(false) {
-							write!(&mut body, " DEPRECATED")?;
-						}
-						if let Some(k) = item.kind {
-							write!(&mut body, " ({:?})", k)?;
-						}
-						if let Some(d) = &item.detail {
-							write!(&mut body, " {}", d)?;
-						}
-					}
-				}
-			}
-			write!(&mut body, "\n")?;
-		}
-		self.action_addrs
-			.push((body.len(), (ClientId::new("", 0), 100000)));
 		if !self.output.is_empty() {
 			// Only take the first 50 lines.
 			let output = self
@@ -633,15 +650,20 @@ impl Server {
 									MarkedString::LanguageString(s) => o.push(s.value.clone()),
 								};
 							}
-							self.current_hover = Some(o.join("\n"));
+							self.set_hover(&url, |hover| {
+								hover.hover = Some(o.join("\n"));
+							});
 						}
 						HoverContents::Markup(mc) => {
-							self.current_hover = Some(mc.value.clone());
+							self.set_hover(&url, |hover| {
+								hover.hover = Some(mc.value.clone());
+							});
 						}
 						_ => panic!("unknown hover response: {:?}", msg),
 					};
 				}
 			}
+			/*
 			Completion::METHOD => {
 				let msg = serde_json::from_str::<Option<CompletionResponse>>(result.get())?;
 				if let Some(msg) = msg {
@@ -658,6 +680,7 @@ impl Server {
 					self.actions.insert(client_id, v);
 				}
 			}
+			*/
 			References::METHOD => {
 				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.get())?;
 				if let Some(mut msg) = msg {
@@ -771,15 +794,19 @@ impl Server {
 				if let Some(msg) = msg {
 					if self.autorun.remove_entry(&client_id.msg_id).is_some() {
 						for m in msg.iter().cloned() {
-							self.run_action(client_id.clone(), url.clone(), Action::Command(m))?;
+							self.run_action(
+								&client_id.client_name,
+								url.clone(),
+								Action::Command(m),
+							)?;
 						}
 					} else {
-						self.actions.clear();
-						let mut v = vec![];
-						for m in msg.iter().cloned() {
-							v.push((Action::Command(m), url.clone()));
-						}
-						self.actions.insert(client_id, v);
+						self.set_hover(&url, |hover| {
+							hover.actions.clear();
+							for m in msg.iter().cloned() {
+								hover.actions.push(Action::Command(m));
+							}
+						});
 					}
 				}
 			}
@@ -1046,6 +1073,14 @@ impl Server {
 		};
 		drop(sw);
 		self.did_change(wid)?;
+		self.current_hover = Some(WindowHover {
+			client_name: client_name.into(),
+			url: url.clone(),
+			actions: vec![],
+			action_addrs: vec![],
+			hover: None,
+			body: "".into(),
+		});
 		self.send_request::<HoverRequest>(
 			&client_name,
 			url.clone(),
@@ -1181,7 +1216,7 @@ impl Server {
 	}
 	fn send_request<R: Request>(
 		&mut self,
-		client_name: &String,
+		client_name: &str,
 		url: Url,
 		params: R::Params,
 	) -> Result<usize> {
@@ -1199,12 +1234,14 @@ impl Server {
 		let client = self.clients.get_mut(client_name).unwrap();
 		client.notify::<N>(params)
 	}
-	fn run_code_action(&mut self, client_id: ClientId, idx: usize) -> Result<()> {
+	/*
+	fn run_code_action(&mut self, client_name:&str, idx: usize) -> Result<()> {
 		let (action, url) = self.actions.remove(&client_id).unwrap().remove(idx);
 		self.actions.clear();
 		self.run_action(client_id, url, action)
 	}
-	fn run_action(&mut self, client_id: ClientId, url: Url, action: Action) -> Result<()> {
+	*/
+	fn run_action(&mut self, client_name: &str, url: Url, action: Action) -> Result<()> {
 		match action {
 			Action::Command(CodeActionOrCommand::Command(cmd)) => {
 				if let Some(args) = cmd.arguments {
@@ -1229,7 +1266,7 @@ impl Server {
 					self.apply_workspace_edit(&edit)?;
 				} else {
 					let _id = self.send_request::<CodeActionResolveRequest>(
-						&client_id.client_name,
+						client_name.into(),
 						url,
 						action,
 					)?;
@@ -1259,7 +1296,7 @@ impl Server {
 		match ev.c2 {
 			'x' | 'X' => match ev.text.as_str() {
 				"Get" => {
-					self.actions.clear();
+					//self.actions.clear();
 					self.output.clear();
 					self.sync_windows()?;
 					self.diags.clear();
@@ -1283,15 +1320,28 @@ impl Server {
 					}
 				}
 				{
-					let mut cid: Option<(ClientId, usize)> = None;
-					for (pos, (client_id, idx)) in self.action_addrs.iter().rev() {
-						if (*pos as u32) < ev.q0 && client_id.msg_id != 0 {
-							cid = Some((client_id.clone(), *idx));
-							break;
+					let mut action: Option<(String, Url, Action)> = None;
+					if let Some(hover) = self.current_hover.as_mut() {
+						let mut action_idx: Option<usize> = None;
+						for (pos, idx) in hover.action_addrs.iter().rev() {
+							if (*pos as u32) < ev.q0 {
+								action_idx = Some(*idx);
+								break;
+							}
+						}
+						if let Some(idx) = action_idx {
+							action = Some((
+								hover.client_name.to_string(),
+								hover.url.clone(),
+								hover.actions.remove(idx),
+							));
 						}
 					}
-					if let Some((cid, idx)) = cid {
-						return self.run_code_action(cid, idx);
+					if let Some((client_name, url, action)) = action {
+						self.set_hover(&url, |hover| {
+							hover.actions.clear();
+						});
+						return self.run_action(&client_name, url, action);
 					}
 				}
 				return plumb_location(ev.text);
