@@ -242,7 +242,11 @@ impl ServerWin {
 		let pos = self.pos()?;
 		let nl = NlOffsets::new(buf.as_bytes())?;
 		let (line, _col) = nl.offset_to_line(pos.0);
-		let line = buf.lines().nth(line as usize).unwrap().to_string();
+		let line = buf
+			.lines()
+			.nth(line as usize)
+			.ok_or(anyhow::anyhow!("no such line"))?
+			.to_string();
 		Ok(line)
 	}
 }
