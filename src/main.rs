@@ -682,7 +682,7 @@ impl Server {
 			HoverRequest::METHOD => {
 				let msg = serde_json::from_str::<Option<Hover>>(result.get())?;
 				if let Some(msg) = msg {
-					match dbg!(&msg.contents) {
+					match &msg.contents {
 						HoverContents::Array(mss) => {
 							let mut o: Vec<String> = vec![];
 							for ms in mss {
