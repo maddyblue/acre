@@ -102,7 +102,7 @@ impl std::fmt::Display for WDProgress {
 #[derive(Debug, Clone)]
 enum Action {
 	Command(CodeActionOrCommand),
-	Completion(Url, CompletionItem),
+	Completion(CompletionItem),
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -160,11 +160,22 @@ struct Server {
 struct WindowHover {
 	client_name: String,
 	url: Url,
+	/// line text of the hover.
+	line: String,
+	/// token (word at the cursor) of the hover.
+	token: Option<String>,
+	/// on hover response from lsp
 	hover: Option<String>,
-	actions: Vec<Action>,
-	/// Vec of (position, index) into the vec of actions.
-	action_addrs: Vec<(usize, usize)>,
+	/// completion response. we need to cache this because we also need the token
+	/// response to come, and we don't know which will come first.
+	completion: Vec<CompletionItem>,
+	code_actions: Vec<Action>,
 
+	/// merged actions from the code action and completion requests
+	actions: Vec<Action>,
+	/// Vec of (position, index) into the vec of actions
+	action_addrs: Vec<(usize, usize)>,
+	/// cached output result of hover and actions
 	body: String,
 }
 
@@ -223,6 +234,16 @@ impl ServerWin {
 	fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
 		let pos = self.position()?;
 		Ok(TextDocumentPositionParams::new(self.doc_ident(), pos))
+	}
+	/// Returns the current line's text.
+	fn line(&mut self) -> Result<String> {
+		let mut buf = String::new();
+		self.w.read(File::Body)?.read_to_string(&mut buf)?;
+		let pos = self.pos()?;
+		let nl = NlOffsets::new(buf.as_bytes())?;
+		let (line, _col) = nl.offset_to_line(pos.0);
+		let line = buf.lines().nth(line as usize).unwrap().to_string();
+		Ok(line)
 	}
 }
 
@@ -340,14 +361,37 @@ impl Server {
 	}
 	/// Runs f if self.current_hover is Some and matches the Url, and updates the hover action addrs
 	/// and body.
-	fn set_hover<F: Fn(&mut WindowHover)>(&mut self, url: &Url, f: F) {
+	fn set_hover<F: FnOnce(&mut WindowHover)>(&mut self, url: &Url, f: F) {
 		if let Some(hover) = self.current_hover.as_mut() {
 			if &hover.url == url {
 				f(hover);
+
+				hover.actions.clear();
+				hover.actions.extend(hover.code_actions.clone());
+				if let Some(token) = &hover.token {
+					let mut v = vec![];
+					for a in &hover.completion {
+						let filter = if let Some(ref filter) = a.filter_text {
+							filter.clone()
+						} else {
+							a.label.clone()
+						};
+						if filter.contains(token) {
+							v.push(Action::Completion(a.clone()));
+							if v.len() == 10 {
+								break;
+							}
+						}
+					}
+					hover.actions.extend(v);
+				}
+
 				hover.body.clear();
 				if let Some(text) = &hover.hover {
 					hover.body.push_str(text.trim());
-					hover.body.push_str("\n");
+					if !hover.actions.is_empty() {
+						hover.body.push_str("\n");
+					}
 				}
 
 				hover.action_addrs.clear();
@@ -361,7 +405,7 @@ impl Server {
 						Action::Command(CodeActionOrCommand::CodeAction(action)) => {
 							write!(&mut hover.body, "{}[{}]", newline, action.title).unwrap();
 						}
-						Action::Completion(_, item) => {
+						Action::Completion(item) => {
 							write!(&mut hover.body, "\n[insert] {}:", item.label).unwrap();
 							if item.deprecated.unwrap_or(false) {
 								write!(&mut hover.body, " DEPRECATED").unwrap();
@@ -430,9 +474,6 @@ impl Server {
 				Some(v) => v,
 				None => continue,
 			};
-			if caps.completion_provider.is_some() {
-				//body.push_str("[complete] ");
-			}
 			if caps.definition_provider.is_some() {
 				body.push_str("[definition] ");
 			}
@@ -629,7 +670,7 @@ impl Server {
 					InitializedParams {},
 				)?;
 				self.capabilities
-					.insert(client_id.client_name, msg.capabilities.clone());
+					.insert(client_id.client_name, msg.capabilities);
 				self.sync_windows()?;
 			}
 			GotoDefinition::METHOD => {
@@ -641,7 +682,7 @@ impl Server {
 			HoverRequest::METHOD => {
 				let msg = serde_json::from_str::<Option<Hover>>(result.get())?;
 				if let Some(msg) = msg {
-					match &msg.contents {
+					match dbg!(&msg.contents) {
 						HoverContents::Array(mss) => {
 							let mut o: Vec<String> = vec![];
 							for ms in mss {
@@ -651,36 +692,18 @@ impl Server {
 								};
 							}
 							self.set_hover(&url, |hover| {
-								hover.hover = Some(o.join("\n"));
+								hover.hover = Some(o.join("\n").trim().to_string());
 							});
 						}
 						HoverContents::Markup(mc) => {
 							self.set_hover(&url, |hover| {
-								hover.hover = Some(mc.value.clone());
+								hover.hover = Some(mc.value.trim().to_string());
 							});
 						}
 						_ => panic!("unknown hover response: {:?}", msg),
 					};
 				}
 			}
-			/*
-			Completion::METHOD => {
-				let msg = serde_json::from_str::<Option<CompletionResponse>>(result.get())?;
-				if let Some(msg) = msg {
-					self.actions.clear();
-					let actions = match msg {
-						CompletionResponse::Array(cis) => cis,
-						CompletionResponse::List(cls) => cls.items,
-					};
-					let mut v = vec![];
-					for a in actions.iter().cloned() {
-						v.push((Action::Completion(url.clone(), a), url.clone()));
-					}
-					v.truncate(10);
-					self.actions.insert(client_id, v);
-				}
-			}
-			*/
 			References::METHOD => {
 				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.get())?;
 				if let Some(mut msg) = msg {
@@ -802,9 +825,8 @@ impl Server {
 						}
 					} else {
 						self.set_hover(&url, |hover| {
-							hover.actions.clear();
 							for m in msg.iter().cloned() {
-								hover.actions.push(Action::Command(m));
+								hover.code_actions.push(Action::Command(m));
 							}
 						});
 					}
@@ -818,6 +840,17 @@ impl Server {
 					} else {
 						eprintln!("unexpected CodeActionResolveRequest response: {:#?}", msg);
 					}
+				}
+			}
+			Completion::METHOD => {
+				let msg = serde_json::from_str::<Option<CompletionResponse>>(result.get())?;
+				if let Some(msg) = msg {
+					self.set_hover(&url, move |hover| {
+						hover.completion = match msg {
+							CompletionResponse::Array(cis) => cis,
+							CompletionResponse::List(cls) => cls.items,
+						};
+					});
 				}
 			}
 			Formatting::METHOD => {
@@ -866,6 +899,31 @@ impl Server {
 				let msg = serde_json::from_str::<Option<GotoTypeDefinitionResponse>>(result.get())?;
 				if let Some(msg) = msg {
 					goto_definition(&msg)?;
+				}
+			}
+			SemanticTokensRangeRequest::METHOD => {
+				let msg = serde_json::from_str::<Option<SemanticTokensRangeResult>>(result.get())?;
+				if let Some(msg) = msg {
+					match msg {
+						SemanticTokensRangeResult::Tokens(tokens) => {
+							// TODO: use the result_id and probably verify it with the send message?
+							// Not sure why there would be more than 1 result, but we only need to care
+							// about a single one anyway.
+							if let Some(token) = tokens.data.into_iter().next() {
+								self.set_hover(&url, |hover| {
+									hover.token = Some(
+										hover
+											.line
+											.chars()
+											.skip(token.delta_start as usize)
+											.take(token.length as usize)
+											.collect(),
+									);
+								});
+							}
+						}
+						_ => eprintln!("unsupported: {:#?}", msg),
+					}
 				}
 			}
 			_ => panic!("unrecognized type: {}", typ),
@@ -1071,11 +1129,16 @@ impl Server {
 			start: text_document_position_params.position,
 			end: text_document_position_params.position,
 		};
+		let line = sw.line()?;
 		drop(sw);
 		self.did_change(wid)?;
 		self.current_hover = Some(WindowHover {
 			client_name: client_name.into(),
 			url: url.clone(),
+			line,
+			token: None,
+			completion: vec![],
+			code_actions: vec![],
 			actions: vec![],
 			action_addrs: vec![],
 			hover: None,
@@ -1085,15 +1148,15 @@ impl Server {
 			&client_name,
 			url.clone(),
 			HoverParams {
-				text_document_position_params,
+				text_document_position_params: text_document_position_params.clone(),
 				work_done_progress_params,
 			},
 		)?;
 		self.send_request::<CodeActionRequest>(
 			client_name,
-			url,
+			url.clone(),
 			CodeActionParams {
-				text_document,
+				text_document: text_document.clone(),
 				range,
 				context: CodeActionContext {
 					diagnostics: vec![],
@@ -1101,6 +1164,29 @@ impl Server {
 				},
 				work_done_progress_params,
 				partial_result_params,
+			},
+		)?;
+		self.send_request::<Completion>(
+			&client_name,
+			url.clone(),
+			CompletionParams {
+				text_document_position: text_document_position_params,
+				work_done_progress_params,
+				partial_result_params,
+				context: Some(CompletionContext {
+					trigger_kind: CompletionTriggerKind::Invoked,
+					trigger_character: None,
+				}),
+			},
+		)?;
+		self.send_request::<SemanticTokensRangeRequest>(
+			&client_name,
+			url.clone(),
+			SemanticTokensRangeParams {
+				work_done_progress_params,
+				partial_result_params,
+				text_document: text_document.clone(),
+				range,
 			},
 		)?;
 		Ok(())
@@ -1123,21 +1209,6 @@ impl Server {
 						text_document_position_params,
 						work_done_progress_params,
 						partial_result_params,
-					},
-				)?;
-			}
-			"complete" => {
-				self.send_request::<Completion>(
-					client_name,
-					url,
-					CompletionParams {
-						text_document_position,
-						work_done_progress_params,
-						partial_result_params,
-						context: Some(CompletionContext {
-							trigger_kind: CompletionTriggerKind::Invoked,
-							trigger_character: None,
-						}),
 					},
 				)?;
 			}
@@ -1234,13 +1305,6 @@ impl Server {
 		let client = self.clients.get_mut(client_name).unwrap();
 		client.notify::<N>(params)
 	}
-	/*
-	fn run_code_action(&mut self, client_name:&str, idx: usize) -> Result<()> {
-		let (action, url) = self.actions.remove(&client_id).unwrap().remove(idx);
-		self.actions.clear();
-		self.run_action(client_id, url, action)
-	}
-	*/
 	fn run_action(&mut self, client_name: &str, url: Url, action: Action) -> Result<()> {
 		match action {
 			Action::Command(CodeActionOrCommand::Command(cmd)) => {
@@ -1272,7 +1336,7 @@ impl Server {
 					)?;
 				}
 			}
-			Action::Completion(url, item) => {
+			Action::Completion(item) => {
 				let format = item
 					.insert_text_format
 					.unwrap_or(InsertTextFormat::PlainText);
@@ -1339,7 +1403,8 @@ impl Server {
 					}
 					if let Some((client_name, url, action)) = action {
 						self.set_hover(&url, |hover| {
-							hover.actions.clear();
+							hover.code_actions.clear();
+							hover.completion.clear();
 						});
 						return self.run_action(&client_name, url, action);
 					}
