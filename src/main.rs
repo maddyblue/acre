@@ -177,8 +177,9 @@ struct WindowHover {
 
 	/// merged actions from the code action and completion requests
 	actions: Vec<Action>,
-	/// Vec of (position, index) into the vec of actions
-	action_addrs: Vec<(usize, usize)>,
+	/// Vec of (position, index) into the vec of actions. The Option is None for
+	/// the last element.
+	action_addrs: Vec<(usize, Option<usize>)>,
 	/// cached output result of hover and actions
 	body: String,
 }
@@ -415,7 +416,7 @@ impl Server {
 					if idx == 0 && !hover.body.is_empty() {
 						hover.body.push_str("\n");
 					}
-					hover.action_addrs.push((hover.body.len(), idx));
+					hover.action_addrs.push((hover.body.len(), Some(idx)));
 					let newline = if hover.body.is_empty() { "" } else { "\n" };
 					match action {
 						Action::Command(CodeActionOrCommand::Command(cmd)) => {
@@ -454,7 +455,7 @@ impl Server {
 						}
 					}
 				}
-				hover.action_addrs.push((hover.body.len(), 100000));
+				hover.action_addrs.push((hover.body.len(), None));
 			}
 		}
 	}
@@ -1419,7 +1420,7 @@ impl Server {
 						let mut action_idx: Option<usize> = None;
 						for (pos, idx) in hover.action_addrs.iter().rev() {
 							if (*pos as u32) < ev.q0 {
-								action_idx = Some(*idx);
+								action_idx = *idx;
 								break;
 							}
 						}
