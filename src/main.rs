@@ -394,6 +394,9 @@ impl Server {
 					}
 					hover.actions.extend(v);
 				}
+
+				// Until lenses work, forcibly clear them.
+				hover.lens.clear();
 				hover
 					.actions
 					.extend(hover.lens.iter().map(|lens| Action::CodeLens(lens.clone())));
@@ -439,8 +442,7 @@ impl Server {
 						}
 						// TODO: extract out the range text and append it to the command title to
 						// distinguish between lenses.
-						Action::CodeLens(_lens) => {
-							/*
+						Action::CodeLens(lens) => {
 							write!(
 								&mut hover.body,
 								"{}[{}]",
@@ -451,7 +453,6 @@ impl Server {
 									.unwrap_or("unknown command".into())
 							)
 							.unwrap();
-							*/
 						}
 					}
 				}
@@ -838,6 +839,12 @@ impl Server {
 					self.set_hover(&url, |hover| {
 						hover.lens = msg;
 					});
+				}
+			}
+			CodeLensResolve::METHOD => {
+				let msg = serde_json::from_str::<Option<Vec<CodeLens>>>(result.get())?;
+				if let Some(msg) = msg {
+					eprintln!("code resolve msg: {:?}", msg);
 				}
 			}
 			CodeActionRequest::METHOD => {
