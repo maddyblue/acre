@@ -166,6 +166,8 @@ struct WindowHover {
 	token: Option<String>,
 	/// on hover response from lsp
 	hover: Option<String>,
+	/// result of signature request
+	signature: Option<String>,
 	/// completion response. we need to cache this because we also need the token
 	/// response to come, and we don't know which will come first.
 	completion: Vec<CompletionItem>,
@@ -393,13 +395,21 @@ impl Server {
 				hover.body.clear();
 				if let Some(text) = &hover.hover {
 					hover.body.push_str(text.trim());
-					if !hover.actions.is_empty() {
+					hover.body.push_str("\n");
+				}
+				if let Some(text) = &hover.signature {
+					if !hover.body.is_empty() {
 						hover.body.push_str("\n");
 					}
+					hover.body.push_str(text.trim());
+					hover.body.push_str("\n");
 				}
 
 				hover.action_addrs.clear();
 				for (idx, action) in hover.actions.iter().enumerate() {
+					if idx == 0 && !hover.body.is_empty() {
+						hover.body.push_str("\n");
+					}
 					hover.action_addrs.push((hover.body.len(), idx));
 					let newline = if hover.body.is_empty() { "" } else { "\n" };
 					match action {
@@ -495,9 +505,6 @@ impl Server {
 			}
 			if caps.document_symbol_provider.is_some() {
 				body.push_str("[symbols] ");
-			}
-			if caps.signature_help_provider.is_some() {
-				body.push_str("[signature] ");
 			}
 			if caps.type_definition_provider.is_some() {
 				body.push_str("[typedef] ");
@@ -791,13 +798,22 @@ impl Server {
 			SignatureHelpRequest::METHOD => {
 				let msg = serde_json::from_str::<Option<SignatureHelp>>(result.get())?;
 				if let Some(msg) = msg {
-					let mut o: Vec<String> = vec![];
-					for sig in &msg.signatures {
-						o.push(sig.label.clone());
-					}
-					if o.len() > 0 {
-						self.output = o.join("\n");
-					}
+					let sig = match msg.active_signature {
+						Some(i) => i,
+						None => 0,
+					};
+					let sig = msg
+						.signatures
+						.get(sig as usize)
+						.ok_or(anyhow::anyhow!("expected signature"))?;
+					self.set_hover(&url, |hover| {
+						let mut s: String = sig.label.clone();
+						if let Some(doc) = &sig.documentation {
+							s.push_str("\n");
+							s.push_str(extract_doc(doc));
+						}
+						hover.signature = Some(s);
+					});
 				}
 			}
 			CodeLensRequest::METHOD => {
@@ -1141,6 +1157,7 @@ impl Server {
 			url: url.clone(),
 			line,
 			token: None,
+			signature: None,
 			completion: vec![],
 			code_actions: vec![],
 			actions: vec![],
@@ -1174,7 +1191,7 @@ impl Server {
 			&client_name,
 			url.clone(),
 			CompletionParams {
-				text_document_position: text_document_position_params,
+				text_document_position: text_document_position_params.clone(),
 				work_done_progress_params,
 				partial_result_params,
 				context: Some(CompletionContext {
@@ -1191,6 +1208,15 @@ impl Server {
 				partial_result_params,
 				text_document: text_document.clone(),
 				range,
+			},
+		)?;
+		self.send_request::<SignatureHelpRequest>(
+			client_name,
+			url,
+			SignatureHelpParams {
+				context: None,
+				text_document_position_params: text_document_position_params.clone(),
+				work_done_progress_params,
 			},
 		)?;
 		Ok(())
@@ -1238,17 +1264,6 @@ impl Server {
 						text_document,
 						work_done_progress_params,
 						partial_result_params,
-					},
-				)?;
-			}
-			"signature" => {
-				self.send_request::<SignatureHelpRequest>(
-					client_name,
-					url,
-					SignatureHelpParams {
-						context: None,
-						text_document_position_params,
-						work_done_progress_params,
 					},
 				)?;
 			}
@@ -1636,6 +1651,13 @@ fn cmp_position(a: &Position, b: &Position) -> Ordering {
 		return a.line.cmp(&b.line);
 	}
 	return a.character.cmp(&b.character);
+}
+
+fn extract_doc(d: &Documentation) -> &str {
+	match d {
+		Documentation::String(s) => s,
+		Documentation::MarkupContent(c) => &c.value,
+	}
 }
 
 #[allow(non_upper_case_globals)]
