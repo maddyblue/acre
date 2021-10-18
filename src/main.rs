@@ -103,6 +103,7 @@ impl std::fmt::Display for WDProgress {
 enum Action {
 	Command(CodeActionOrCommand),
 	Completion(CompletionItem),
+	CodeLens(CodeLens),
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -168,6 +169,7 @@ struct WindowHover {
 	hover: Option<String>,
 	/// result of signature request
 	signature: Option<String>,
+	lens: Vec<CodeLens>,
 	/// completion response. we need to cache this because we also need the token
 	/// response to come, and we don't know which will come first.
 	completion: Vec<CompletionItem>,
@@ -391,6 +393,9 @@ impl Server {
 					}
 					hover.actions.extend(v);
 				}
+				hover
+					.actions
+					.extend(hover.lens.iter().map(|lens| Action::CodeLens(lens.clone())));
 
 				hover.body.clear();
 				if let Some(text) = &hover.hover {
@@ -430,6 +435,22 @@ impl Server {
 							if let Some(d) = &item.detail {
 								write!(&mut hover.body, " {}", d).unwrap();
 							}
+						}
+						// TODO: extract out the range text and append it to the command title to
+						// distinguish between lenses.
+						Action::CodeLens(_lens) => {
+							/*
+							write!(
+								&mut hover.body,
+								"{}[{}]",
+								newline,
+								lens.command
+									.as_ref()
+									.map(|c| c.title.clone())
+									.unwrap_or("unknown command".into())
+							)
+							.unwrap();
+							*/
 						}
 					}
 				}
@@ -493,12 +514,6 @@ impl Server {
 			}
 			if caps.implementation_provider.is_some() {
 				body.push_str("[impl] ");
-			}
-			#[cfg(debug_assertions)]
-			{
-				if caps.code_lens_provider.is_some() {
-					body.push_str("[lens] ");
-				}
 			}
 			if caps.references_provider.is_some() {
 				body.push_str("[references] ");
@@ -819,17 +834,9 @@ impl Server {
 			CodeLensRequest::METHOD => {
 				let msg = serde_json::from_str::<Option<Vec<CodeLens>>>(result.get())?;
 				if let Some(msg) = msg {
-					let mut o: Vec<String> = vec![];
-					for lens in msg {
-						let loc = Location {
-							uri: url.clone(),
-							range: lens.range,
-						};
-						o.push(format!("{}", location_to_plumb(&loc)));
-					}
-					if o.len() > 0 {
-						self.output = o.join("\n");
-					}
+					self.set_hover(&url, |hover| {
+						hover.lens = msg;
+					});
 				}
 			}
 			CodeActionRequest::METHOD => {
@@ -1158,6 +1165,7 @@ impl Server {
 			line,
 			token: None,
 			signature: None,
+			lens: vec![],
 			completion: vec![],
 			code_actions: vec![],
 			actions: vec![],
@@ -1212,11 +1220,20 @@ impl Server {
 		)?;
 		self.send_request::<SignatureHelpRequest>(
 			client_name,
-			url,
+			url.clone(),
 			SignatureHelpParams {
 				context: None,
 				text_document_position_params: text_document_position_params.clone(),
 				work_done_progress_params,
+			},
+		)?;
+		self.send_request::<CodeLensRequest>(
+			client_name,
+			url.clone(),
+			CodeLensParams {
+				text_document,
+				work_done_progress_params,
+				partial_result_params,
 			},
 		)?;
 		Ok(())
@@ -1261,17 +1278,6 @@ impl Server {
 					client_name,
 					url,
 					DocumentSymbolParams {
-						text_document,
-						work_done_progress_params,
-						partial_result_params,
-					},
-				)?;
-			}
-			"lens" => {
-				self.send_request::<CodeLensRequest>(
-					client_name,
-					url,
-					CodeLensParams {
 						text_document,
 						work_done_progress_params,
 						partial_result_params,
@@ -1371,6 +1377,11 @@ impl Server {
 					}
 				}
 				panic!("unsupported");
+			}
+			Action::CodeLens(lens) => {
+				// TODO: rust-analyzer complains about "code lens without data" here. If I set
+				// lens.data to Value::Null, it complains with some resolution error.
+				let _id = self.send_request::<CodeLensResolve>(client_name.into(), url, lens)?;
 			}
 		}
 		Ok(())
