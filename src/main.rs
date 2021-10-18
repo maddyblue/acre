@@ -342,7 +342,7 @@ impl Server {
 				let mut ev = match wev.read_event() {
 					Ok(ev) => ev,
 					Err(err) => {
-						eprintln!("read event err {}", err);
+						eprintln!("read event err: {}", err);
 						return;
 					}
 				};
@@ -669,7 +669,7 @@ impl Server {
 	}
 	fn lsp_error(&mut self, client_id: ClientId, err: lsp::ResponseError) -> Result<()> {
 		self.requests.remove(&client_id);
-		self.output = format!("{}", err.message);
+		self.output = format!("lsp error: {}", err.message);
 		Ok(())
 	}
 	fn lsp_response(
