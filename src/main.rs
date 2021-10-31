@@ -211,11 +211,14 @@ impl ServerWin {
 	fn nl(&mut self) -> Result<NlOffsets> {
 		NlOffsets::new(self.w.read(File::Body)?)
 	}
-	fn position(&mut self) -> Result<Position> {
+	fn range(&mut self) -> Result<Range> {
 		let pos = self.pos()?;
 		let nl = self.nl()?;
 		let (line, col) = nl.offset_to_line(pos.0);
-		Ok(Position::new(line, col))
+		let start = Position::new(line, col);
+		let (line, col) = nl.offset_to_line(pos.1);
+		let end = Position::new(line, col);
+		Ok(Range::new(start, end))
 	}
 	fn text(&mut self) -> Result<(i32, String)> {
 		let mut buf = String::new();
@@ -238,8 +241,11 @@ impl ServerWin {
 		TextDocumentIdentifier::new(self.url.clone())
 	}
 	fn text_doc_pos(&mut self) -> Result<TextDocumentPositionParams> {
-		let pos = self.position()?;
-		Ok(TextDocumentPositionParams::new(self.doc_ident(), pos))
+		let range = self.range()?;
+		Ok(TextDocumentPositionParams::new(
+			self.doc_ident(),
+			range.start,
+		))
 	}
 	/// Returns the current line's text.
 	fn line(&mut self) -> Result<String> {
@@ -1177,12 +1183,10 @@ impl Server {
 		let client_name = &sw.client.clone();
 		let url = sw.url.clone();
 		let wid = sw.w.id();
-		let text_document_position_params = sw.text_doc_pos()?;
+		let range = sw.range()?;
+		let text_document_position_params =
+			TextDocumentPositionParams::new(sw.doc_ident(), range.start);
 		let text_document = TextDocumentIdentifier::new(url.clone());
-		let range = Range {
-			start: text_document_position_params.position,
-			end: text_document_position_params.position,
-		};
 		let line = sw.line()?;
 		drop(sw);
 		self.did_change(wid)?;
