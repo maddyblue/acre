@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs::metadata;
@@ -129,8 +130,8 @@ struct Server {
 	names: Vec<(String, usize)>,
 	/// Vec of (position, win id) to map Look locations to windows.
 	addr: Vec<(usize, usize)>,
-	/// Set of opened files. Needed to distinguish Zerox'd windows.
-	opened_urls: HashSet<Url>,
+	/// Set of opened files and associated win ids. Needed to distinguish Zerox'd windows.
+	opened_urls: HashMap<Url, HashSet<usize>>,
 
 	body: String,
 	output: String,
@@ -293,7 +294,7 @@ impl Server {
 			w,
 			ws: HashMap::new(),
 			names: vec![],
-			opened_urls: HashSet::new(),
+			opened_urls: HashMap::new(),
 			addr: vec![],
 			output: "".to_string(),
 			body: "".to_string(),
@@ -619,7 +620,10 @@ impl Server {
 
 					// Send an open event if this is the first time we've seen this filename (ID
 					// tracking is not enough due to Zerox).
-					if self.opened_urls.insert(sw.url.clone()) {
+					let entry = self.opened_urls.entry(sw.url.clone());
+					let need_open = matches!(entry, Entry::Vacant(_));
+					entry.or_default().insert(wi.id);
+					if need_open {
 						let (version, text) = sw.text()?;
 						self.send_notification::<DidOpenTextDocument>(
 							&sw.client,
@@ -641,17 +645,24 @@ impl Server {
 		}
 
 		// close remaining files
-		let to_close: Vec<(String, TextDocumentIdentifier)> = self
+		let to_close: Vec<(String, TextDocumentIdentifier, usize)> = self
 			.ws
 			.iter()
-			.map(|(_, w)| (w.client.clone(), w.doc_ident()))
+			.map(|(_, w)| (w.client.clone(), w.doc_ident(), w.w.id()))
 			.collect();
-		for (client_name, text_document) in to_close {
-			self.opened_urls.remove(&text_document.uri);
-			self.send_notification::<DidCloseTextDocument>(
-				&client_name,
-				DidCloseTextDocumentParams { text_document },
-			)?;
+		for (client_name, text_document, win_id) in to_close {
+			let ids = self
+				.opened_urls
+				.get_mut(&text_document.uri)
+				.expect("opened_urls out of sync");
+			ids.remove(&win_id);
+			if ids.is_empty() {
+				self.opened_urls.remove(&text_document.uri);
+				self.send_notification::<DidCloseTextDocument>(
+					&client_name,
+					DidCloseTextDocumentParams { text_document },
+				)?;
+			}
 		}
 		self.ws = ws;
 		Ok(())
