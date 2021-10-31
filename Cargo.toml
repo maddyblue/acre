@@ -1,6 +1,6 @@
 [package]
 name = "acre"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Matt Jibson <matt.jibson@gmail.com>"]
 edition = "2018"
 license = "Apache-2.0"
