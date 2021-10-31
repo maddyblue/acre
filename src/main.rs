@@ -402,23 +402,9 @@ impl Server {
 					.extend(hover.lens.iter().map(|lens| Action::CodeLens(lens.clone())));
 
 				hover.body.clear();
-				if let Some(text) = &hover.hover {
-					hover.body.push_str(text.trim());
-					hover.body.push_str("\n");
-				}
-				if let Some(text) = &hover.signature {
-					if !hover.body.is_empty() {
-						hover.body.push_str("\n");
-					}
-					hover.body.push_str(text.trim());
-					hover.body.push_str("\n");
-				}
 
 				hover.action_addrs.clear();
-				for (idx, action) in hover.actions.iter().enumerate() {
-					if idx == 0 && !hover.body.is_empty() {
-						hover.body.push_str("\n");
-					}
+				for (idx, action) in hover.actions.iter().take(10).enumerate() {
 					hover.action_addrs.push((hover.body.len(), Some(idx)));
 					let newline = if hover.body.is_empty() { "" } else { "\n" };
 					match action {
@@ -429,7 +415,7 @@ impl Server {
 							write!(&mut hover.body, "{}[{}]", newline, action.title).unwrap();
 						}
 						Action::Completion(item) => {
-							write!(&mut hover.body, "\n[insert] {}:", item.label).unwrap();
+							write!(&mut hover.body, "{}[insert] {}:", newline, item.label).unwrap();
 							if item.deprecated.unwrap_or(false) {
 								write!(&mut hover.body, " DEPRECATED").unwrap();
 							}
@@ -457,6 +443,28 @@ impl Server {
 					}
 				}
 				hover.action_addrs.push((hover.body.len(), None));
+				if !hover.body.is_empty() {
+					hover.body.push_str("\n");
+				}
+
+				if let Some(text) = &hover.hover {
+					if !hover.body.is_empty() {
+						hover.body.push_str("\n");
+					}
+					for line in text.trim().lines().take(10) {
+						hover.body.push_str(line);
+						hover.body.push_str("\n");
+					}
+				}
+				if let Some(text) = &hover.signature {
+					if !hover.body.is_empty() {
+						hover.body.push_str("\n");
+					}
+					for line in text.trim().lines().take(10) {
+						hover.body.push_str(line);
+						hover.body.push_str("\n");
+					}
+				}
 			}
 		}
 	}
@@ -487,7 +495,7 @@ impl Server {
 	fn sync(&mut self) -> Result<()> {
 		let mut body = String::new();
 		if let Some(hover) = &self.current_hover {
-			write!(&mut body, "{}\n----\n", hover.body)?;
+			write!(&mut body, "{}----\n", hover.body)?;
 		}
 		for (_, ds) in &self.diags {
 			for d in ds {
