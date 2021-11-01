@@ -639,7 +639,6 @@ impl Server {
 				Ok(n) => n,
 				Err(_) => continue,
 			};
-			println!("opening {}", wi.name);
 			self.names.push(wi.name.clone());
 			if need_open {
 				let sw = self.get_sw_by_name_id(&wi.name, &wi.id)?;
@@ -647,7 +646,6 @@ impl Server {
 				let url = sw.url.clone();
 				let client_name = sw.client.clone();
 				drop(sw);
-				println!("OPEN {}", url);
 				self.send_notification::<DidOpenTextDocument>(
 					&client_name,
 					DidOpenTextDocumentParams {
@@ -1177,7 +1175,6 @@ impl Server {
 		let sw = self.get_sw_by_name_id(&name, &wid)?;
 		let client = sw.client.clone();
 		let params = sw.change_params()?;
-		println!("CHANGE {}", sw.url);
 		self.send_notification::<DidChangeTextDocument>(&client, params)
 	}
 	fn set_focus(&mut self, ev: LogEvent) -> Result<()> {
@@ -1564,7 +1561,7 @@ impl Server {
 					match msg {
 						Ok(ev) => match ev.op.as_str() {
 							"focus" => {
-								let _ = dbg!(self.set_focus(ev));
+								let _ = self.set_focus(ev);
 							}
 							"put" => {
 								self.cmd_put(ev)?;
