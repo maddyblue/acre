@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs::metadata;
@@ -125,14 +124,14 @@ impl ClientId {
 struct Server {
 	config: TomlConfig,
 	w: Win,
-	ws: HashMap<usize, ServerWin>,
-	/// Sorted Vec of (filenames, win id) to know which order to print windows in.
-	names: Vec<(String, usize)>,
+	/// Filename -> win id -> server win.
+	ws: HashMap<String, HashMap<usize, ServerWin>>,
+	/// Sorted Vec of ordered filenames for printing.
+	names: Vec<String>,
 	/// Vec of (position, win id) to map Look locations to windows.
-	addr: Vec<(usize, usize)>,
-	/// Set of opened files and associated win ids. Needed to distinguish Zerox'd windows.
-	opened_urls: HashMap<Url, HashSet<usize>>,
-
+	addr: Vec<(usize, String)>,
+	/// Holds the last winid of the focus'd filename.
+	focus_id: HashMap<String, usize>,
 	body: String,
 	output: String,
 	focus: String,
@@ -159,6 +158,7 @@ struct Server {
 	autorun: HashMap<usize, ()>,
 }
 
+#[derive(Debug)]
 struct WindowHover {
 	client_name: String,
 	url: Url,
@@ -300,7 +300,7 @@ impl Server {
 			w,
 			ws: HashMap::new(),
 			names: vec![],
-			opened_urls: HashMap::new(),
+			focus_id: HashMap::new(),
 			addr: vec![],
 			output: "".to_string(),
 			body: "".to_string(),
@@ -475,27 +475,32 @@ impl Server {
 			}
 		}
 	}
+	/// Returns the most recently focused win id for a filename.
 	fn winid_by_name(&self, filename: &str) -> Option<usize> {
-		for (name, id) in &self.names {
-			if filename == name {
-				return Some(*id);
-			}
-		}
-		None
+		self.focus_id.get(filename).cloned()
 	}
-	fn get_sw_by_name(&mut self, filename: &str) -> Result<&mut ServerWin> {
+	fn get_sw_by_name_id(&mut self, filename: &str, id: &usize) -> Result<&mut ServerWin> {
+		match self.ws.get_mut(filename) {
+			Some(ids) => match ids.get_mut(id) {
+				Some(sw) => Ok(sw),
+				None => bail!("could not find id {} for filename {}", id, filename),
+			},
+			None => bail!("could not find filename {}", filename),
+		}
+	}
+	fn get_sw_by_name(&mut self, filename: &str) -> Result<(usize, &mut ServerWin)> {
 		let wid = self.winid_by_name(filename);
 		let wid = match wid {
 			Some(id) => id,
 			None => bail!("could not find file {}", filename),
 		};
-		let sw = match self.ws.get_mut(&wid) {
+		let sw = match self.ws.get_mut(filename).and_then(|ids| ids.get_mut(&wid)) {
 			Some(sw) => sw,
 			None => bail!("could not find window {}", wid),
 		};
-		Ok(sw)
+		Ok((wid, sw))
 	}
-	fn get_sw_by_url(&mut self, url: &Url) -> Result<&mut ServerWin> {
+	fn get_sw_by_url(&mut self, url: &Url) -> Result<(usize, &mut ServerWin)> {
 		let filename = url.path();
 		self.get_sw_by_name(filename)
 	}
@@ -513,8 +518,9 @@ impl Server {
 			}
 		}
 		self.addr.clear();
-		for (file_name, id) in &self.names {
-			self.addr.push((body.len(), *id));
+		// Loop through by sorted file name.
+		for file_name in &self.names {
+			self.addr.push((body.len(), file_name.to_string()));
 			write!(
 				&mut body,
 				"{}{}\n\t",
@@ -543,7 +549,7 @@ impl Server {
 			}
 			body.push('\n');
 		}
-		self.addr.push((body.len(), 0));
+		self.addr.push((body.len(), "".into()));
 		write!(&mut body, "-----\n")?;
 		if !self.output.is_empty() {
 			// Only take the first 50 lines.
@@ -583,8 +589,37 @@ impl Server {
 		}
 		Ok(())
 	}
+	fn init_win(&mut self, filename: String, winid: usize) -> Result<bool> {
+		let client_name = match self.lookup_client(filename.clone()) {
+			Ok(n) => n,
+			Err(_) => bail!("no client for {}", filename),
+		};
+		let need_open = !self.ws.contains_key(&filename);
+		if need_open {
+			self.ws.insert(filename.clone(), HashMap::new());
+		}
+		let ids = self.ws.get_mut(&filename).unwrap();
+		let mut fsys = FSYS.lock().unwrap();
+		let ctl = fsys.open(format!("{}/ctl", winid).as_str(), OpenMode::RDWR)?;
+		let w = Win::open(&mut fsys, winid, ctl)?;
+		let sw = ServerWin::new(filename, w, client_name)?;
+		ids.insert(winid, sw);
+		Ok(need_open)
+	}
+	fn lookup_client(&mut self, filename: String) -> Result<String> {
+		for (_, c) in &self.clients {
+			if c.files.is_match(&filename) {
+				// Don't open windows for a client that hasn't initialized yet.
+				if !self.capabilities.contains_key(&c.name) {
+					continue;
+				}
+				self.files.insert(filename, c.name.clone());
+				return Ok(c.name.clone());
+			}
+		}
+		bail!("could not find client for {}", filename)
+	}
 	fn sync_windows(&mut self) -> Result<()> {
-		let mut ws = HashMap::new();
 		let mut wins = WinInfo::windows()?;
 		self.names.clear();
 		wins.sort_by(|a, b| {
@@ -594,83 +629,52 @@ impl Server {
 				a.id.cmp(&b.id)
 			}
 		});
-		self.files.clear();
+		let mut to_close: HashSet<String> = self.ws.keys().cloned().collect();
+		// wins appears to have one entry per filename, even if it's Zerox'd. It
+		// uses the highest id of a zerox'd win (i.e., it will use the id of the new
+		// window). If the newer window is Del'd, the next highest id is used.
 		for wi in wins {
-			let mut client = None;
-			for (_, c) in self.clients.iter_mut() {
-				if c.files.is_match(&wi.name) {
-					// Don't open windows for a client that hasn't initialized yet.
-					if !self.capabilities.contains_key(&c.name) {
-						continue;
-					}
-					self.files.insert(wi.name.clone(), c.name.clone());
-					client = Some(c);
-					break;
-				}
-			}
-			let client = match client {
-				Some(c) => c,
-				None => continue,
+			to_close.remove(&wi.name);
+			let need_open = match self.init_win(wi.name.clone(), wi.id) {
+				Ok(n) => n,
+				Err(_) => continue,
 			};
-			self.names.push((wi.name.clone(), wi.id));
-			let w = match self.ws.remove(&wi.id) {
-				Some(w) => w,
-				None => {
-					let mut fsys = FSYS.lock().unwrap();
-					let ctl = fsys.open(format!("{}/ctl", wi.id).as_str(), OpenMode::RDWR)?;
-					let w = Win::open(&mut fsys, wi.id, ctl)?;
-					// Explicitly drop fsys here to remove its lock to prevent deadlocking if we
-					// call w.events().
-					drop(fsys);
-					let mut sw = ServerWin::new(wi.name, w, client.name.clone())?;
-
-					// Send an open event if this is the first time we've seen this filename (ID
-					// tracking is not enough due to Zerox).
-					let entry = self.opened_urls.entry(sw.url.clone());
-					let need_open = matches!(entry, Entry::Vacant(_));
-					entry.or_default().insert(wi.id);
-					if need_open {
-						let (version, text) = sw.text()?;
-						self.send_notification::<DidOpenTextDocument>(
-							&sw.client,
-							DidOpenTextDocumentParams {
-								text_document: TextDocumentItem::new(
-									sw.url.clone(),
-									"".to_string(), // lang id
-									version,
-									text,
-								),
-							},
-						)?;
-					}
-
-					sw
-				}
-			};
-			ws.insert(wi.id, w);
-		}
-
-		// close remaining files
-		let to_close: Vec<(String, TextDocumentIdentifier, usize)> = self
-			.ws
-			.iter()
-			.map(|(_, w)| (w.client.clone(), w.doc_ident(), w.w.id()))
-			.collect();
-		for (client_name, text_document, win_id) in to_close {
-			let ids = self
-				.opened_urls
-				.get_mut(&text_document.uri)
-				.expect("opened_urls out of sync");
-			ids.remove(&win_id);
-			if ids.is_empty() {
-				self.opened_urls.remove(&text_document.uri);
-				self.send_notification::<DidCloseTextDocument>(
+			println!("opening {}", wi.name);
+			self.names.push(wi.name.clone());
+			if need_open {
+				let sw = self.get_sw_by_name_id(&wi.name, &wi.id)?;
+				let (version, text) = sw.text()?;
+				let url = sw.url.clone();
+				let client_name = sw.client.clone();
+				drop(sw);
+				println!("OPEN {}", url);
+				self.send_notification::<DidOpenTextDocument>(
 					&client_name,
-					DidCloseTextDocumentParams { text_document },
+					DidOpenTextDocumentParams {
+						text_document: TextDocumentItem::new(
+							url,
+							"".to_string(), // lang id
+							version,
+							text,
+						),
+					},
 				)?;
 			}
 		}
-		self.ws = ws;
+
+		// close remaining files
+		for filename in to_close {
+			self.ws.remove(&filename);
+			self.files.remove(&filename);
+			let url = Url::parse(&format!("file://{}", filename))?;
+			let client_name = self.lookup_client(filename)?;
+			self.send_notification::<DidCloseTextDocument>(
+				&client_name,
+				DidCloseTextDocumentParams {
+					text_document: TextDocumentIdentifier::new(url),
+				},
+			)?;
+		}
 		Ok(())
 	}
 	fn lsp_msg(&mut self, client_name: String, orig_msg: Vec<u8>) -> Result<()> {
@@ -1103,7 +1107,7 @@ impl Server {
 		if edits.is_empty() {
 			return Ok(());
 		}
-		let sw = self.get_sw_by_url(url)?;
+		let (_id, sw) = self.get_sw_by_url(url)?;
 		let mut body = String::new();
 		sw.w.read(File::Body)?.read_to_string(&mut body)?;
 		let offsets = NlOffsets::new(std::io::Cursor::new(body.clone()))?;
@@ -1163,33 +1167,34 @@ impl Server {
 		}
 		Ok(())
 	}
-	fn did_change(&mut self, wid: usize) -> Result<()> {
+	fn did_change(&mut self, name: String, wid: usize) -> Result<()> {
 		// Sometimes we are sending a DidChange before a DidOpen. Maybe this is because
 		// acme's event log sometimes misses events. Sync the windows just to be sure.
 		self.sync_windows()?;
-		let sw = match self.ws.get_mut(&wid) {
-			Some(sw) => sw,
-			// Ignore untracked windows.
-			None => return Ok(()),
-		};
+		// Because zerox windows don't appear in the windows call, make sure that
+		// whatever wid we are given is initialized.
+		self.init_win(name.clone(), wid)?;
+		let sw = self.get_sw_by_name_id(&name, &wid)?;
 		let client = sw.client.clone();
 		let params = sw.change_params()?;
+		println!("CHANGE {}", sw.url);
 		self.send_notification::<DidChangeTextDocument>(&client, params)
 	}
 	fn set_focus(&mut self, ev: LogEvent) -> Result<()> {
 		self.focus = ev.name.clone();
+		self.focus_id.insert(ev.name.clone(), ev.id);
 
-		let sw = self.get_sw_by_name(&ev.name)?;
+		self.did_change(ev.name.clone(), ev.id)?;
+		let sw = self.get_sw_by_name_id(&ev.name, &ev.id)?;
 		let client_name = &sw.client.clone();
 		let url = sw.url.clone();
-		let wid = sw.w.id();
 		let range = sw.range()?;
 		let text_document_position_params =
 			TextDocumentPositionParams::new(sw.doc_ident(), range.start);
 		let text_document = TextDocumentIdentifier::new(url.clone());
 		let line = sw.line()?;
 		drop(sw);
-		self.did_change(wid)?;
+
 		self.current_hover = Some(WindowHover {
 			client_name: client_name.into(),
 			url: url.clone(),
@@ -1269,15 +1274,15 @@ impl Server {
 		)?;
 		Ok(())
 	}
-	fn run_event(&mut self, ev: Event, wid: usize) -> Result<()> {
-		self.did_change(wid)?;
-		let sw = self.ws.get_mut(&wid).unwrap();
+	fn run_event(&mut self, ev: Event, filename: &str) -> Result<()> {
+		let (id, sw) = self.get_sw_by_name(filename)?;
 		let client_name = &sw.client.clone();
 		let url = sw.url.clone();
 		let text_document_position_params = sw.text_doc_pos()?;
 		let text_document_position = text_document_position_params.clone();
 		let text_document = TextDocumentIdentifier::new(url.clone());
 		drop(sw);
+		self.did_change(filename.to_string(), id)?;
 		match ev.text.as_str() {
 			"definition" => {
 				self.send_request::<GotoDefinition>(
@@ -1433,15 +1438,15 @@ impl Server {
 			},
 			'L' => {
 				{
-					let mut wid = 0;
-					for (pos, id) in self.addr.iter().rev() {
+					let mut name = None;
+					for (pos, n) in self.addr.iter().rev() {
 						if (*pos as u32) < ev.q0 {
-							wid = *id;
+							name = Some(n.clone());
 							break;
 						}
 					}
-					if wid != 0 {
-						return self.run_event(ev, wid);
+					if let Some(name) = name {
+						return self.run_event(ev, &name);
 					}
 				}
 				{
@@ -1476,14 +1481,9 @@ impl Server {
 		}
 		Ok(())
 	}
-	fn cmd_put(&mut self, id: usize) -> Result<()> {
-		self.did_change(id)?;
-		let sw = if let Some(sw) = self.ws.get(&id) {
-			sw
-		} else {
-			// Ignore unknown ids (untracked files, zerox, etc.).
-			return Ok(());
-		};
+	fn cmd_put(&mut self, ev: LogEvent) -> Result<()> {
+		self.did_change(ev.name.clone(), ev.id)?;
+		let sw = self.get_sw_by_name_id(&ev.name, &ev.id)?;
 		let client_name = &sw.client.clone();
 		let text_document = sw.doc_ident();
 		let url = sw.url.clone();
@@ -1564,17 +1564,17 @@ impl Server {
 					match msg {
 						Ok(ev) => match ev.op.as_str() {
 							"focus" => {
-								let _ = self.set_focus(ev);
+								let _ = dbg!(self.set_focus(ev));
 							}
 							"put" => {
-								self.cmd_put(ev.id)?;
+								self.cmd_put(ev)?;
 								no_sync = true;
 							}
 							"new" | "del" => {
 								self.sync_windows()?;
 							}
 							_ => {
-								panic!("unknown event op {:?}", ev);
+								eprintln!("unknown event op {:?}", ev);
 							}
 						},
 						Err(_) => {
