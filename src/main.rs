@@ -479,28 +479,15 @@ impl Server {
 	fn winid_by_name(&self, filename: &str) -> Option<usize> {
 		self.focus_id.get(filename).cloned()
 	}
-	fn get_sw_by_name_id(&mut self, filename: &str, id: &usize) -> Result<&mut ServerWin> {
-		match self.ws.get_mut(filename) {
-			Some(ids) => match ids.get_mut(id) {
-				Some(sw) => Ok(sw),
-				None => bail!("could not find id {} for filename {}", id, filename),
-			},
-			None => bail!("could not find filename {}", filename),
-		}
+	fn get_sw_by_name_id(&mut self, filename: &str, id: &usize) -> Option<&mut ServerWin> {
+		self.ws.get_mut(filename).and_then(|ids| ids.get_mut(id))
 	}
-	fn get_sw_by_name(&mut self, filename: &str) -> Result<(usize, &mut ServerWin)> {
-		let wid = self.winid_by_name(filename);
-		let wid = match wid {
-			Some(id) => id,
-			None => bail!("could not find file {}", filename),
-		};
-		let sw = match self.ws.get_mut(filename).and_then(|ids| ids.get_mut(&wid)) {
-			Some(sw) => sw,
-			None => bail!("could not find window {}", wid),
-		};
-		Ok((wid, sw))
+	fn get_sw_by_name(&mut self, filename: &str) -> Option<(usize, &mut ServerWin)> {
+		let wid = self.winid_by_name(filename)?;
+		let sw = self.get_sw_by_name_id(filename, &wid)?;
+		Some((wid, sw))
 	}
-	fn get_sw_by_url(&mut self, url: &Url) -> Result<(usize, &mut ServerWin)> {
+	fn get_sw_by_url(&mut self, url: &Url) -> Option<(usize, &mut ServerWin)> {
 		let filename = url.path();
 		self.get_sw_by_name(filename)
 	}
@@ -641,7 +628,10 @@ impl Server {
 			};
 			self.names.push(wi.name.clone());
 			if need_open {
-				let sw = self.get_sw_by_name_id(&wi.name, &wi.id)?;
+				let sw = match self.get_sw_by_name_id(&wi.name, &wi.id) {
+					Some(sw) => sw,
+					None => continue,
+				};
 				let (version, text) = sw.text()?;
 				let url = sw.url.clone();
 				let client_name = sw.client.clone();
@@ -1105,7 +1095,10 @@ impl Server {
 		if edits.is_empty() {
 			return Ok(());
 		}
-		let (_id, sw) = self.get_sw_by_url(url)?;
+		let (_id, sw) = match self.get_sw_by_url(url) {
+			Some(v) => v,
+			None => return Ok(()),
+		};
 		let mut body = String::new();
 		sw.w.read(File::Body)?.read_to_string(&mut body)?;
 		let offsets = NlOffsets::new(std::io::Cursor::new(body.clone()))?;
@@ -1171,8 +1164,13 @@ impl Server {
 		self.sync_windows()?;
 		// Because zerox windows don't appear in the windows call, make sure that
 		// whatever wid we are given is initialized.
-		self.init_win(name.clone(), wid)?;
-		let sw = self.get_sw_by_name_id(&name, &wid)?;
+		if self.init_win(name.clone(), wid).is_err() {
+			return Ok(());
+		}
+		let sw = match self.get_sw_by_name_id(&name, &wid) {
+			Some(sw) => sw,
+			None => return Ok(()),
+		};
 		let client = sw.client.clone();
 		let params = sw.change_params()?;
 		self.send_notification::<DidChangeTextDocument>(&client, params)
@@ -1182,7 +1180,10 @@ impl Server {
 		self.focus_id.insert(ev.name.clone(), ev.id);
 
 		self.did_change(ev.name.clone(), ev.id)?;
-		let sw = self.get_sw_by_name_id(&ev.name, &ev.id)?;
+		let sw = match self.get_sw_by_name_id(&ev.name, &ev.id) {
+			Some(sw) => sw,
+			None => return Ok(()),
+		};
 		let client_name = &sw.client.clone();
 		let url = sw.url.clone();
 		let range = sw.range()?;
@@ -1272,7 +1273,10 @@ impl Server {
 		Ok(())
 	}
 	fn run_event(&mut self, ev: Event, filename: &str) -> Result<()> {
-		let (id, sw) = self.get_sw_by_name(filename)?;
+		let (id, sw) = match self.get_sw_by_name(filename) {
+			Some(v) => v,
+			None => return Ok(()),
+		};
 		let client_name = &sw.client.clone();
 		let url = sw.url.clone();
 		let text_document_position_params = sw.text_doc_pos()?;
@@ -1480,7 +1484,10 @@ impl Server {
 	}
 	fn cmd_put(&mut self, ev: LogEvent) -> Result<()> {
 		self.did_change(ev.name.clone(), ev.id)?;
-		let sw = self.get_sw_by_name_id(&ev.name, &ev.id)?;
+		let sw = match self.get_sw_by_name_id(&ev.name, &ev.id) {
+			Some(sw) => sw,
+			None => return Ok(()),
+		};
 		let client_name = &sw.client.clone();
 		let text_document = sw.doc_ident();
 		let url = sw.url.clone();
