@@ -129,7 +129,7 @@ struct Server {
 	/// Sorted Vec of ordered filenames for printing.
 	names: Vec<String>,
 	/// Vec of (position, win id) to map Look locations to windows.
-	addr: Vec<(usize, String)>,
+	addr: Vec<(usize, Option<String>)>,
 	/// Holds the last winid of the focus'd filename.
 	focus_id: HashMap<String, usize>,
 	body: String,
@@ -507,7 +507,7 @@ impl Server {
 		self.addr.clear();
 		// Loop through by sorted file name.
 		for file_name in &self.names {
-			self.addr.push((body.len(), file_name.to_string()));
+			self.addr.push((body.len(), Some(file_name.to_string())));
 			write!(
 				&mut body,
 				"{}{}\n\t",
@@ -536,7 +536,7 @@ impl Server {
 			}
 			body.push('\n');
 		}
-		self.addr.push((body.len(), "".into()));
+		self.addr.push((body.len(), None));
 		write!(&mut body, "-----\n")?;
 		if !self.output.is_empty() {
 			// Only take the first 50 lines.
@@ -1442,7 +1442,7 @@ impl Server {
 					let mut name = None;
 					for (pos, n) in self.addr.iter().rev() {
 						if (*pos as u32) < ev.q0 {
-							name = Some(n.clone());
+							name = n.clone();
 							break;
 						}
 					}
