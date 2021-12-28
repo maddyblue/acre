@@ -787,7 +787,7 @@ impl Server {
 							for si in sis {
 								// Ignore variables in methods.
 								if si.container_name.as_ref().unwrap_or(&"".to_string()).len() == 0
-									&& si.kind == SymbolKind::Variable
+									&& si.kind == SymbolKind::VARIABLE
 								{
 									continue;
 								}
@@ -906,7 +906,7 @@ impl Server {
 			Formatting::METHOD => {
 				let msg = serde_json::from_str::<Option<Vec<TextEdit>>>(result.get())?;
 				if let Some(msg) = msg {
-					self.apply_text_edits(&url, InsertTextFormat::PlainText, &msg)?;
+					self.apply_text_edits(&url, InsertTextFormat::PLAIN_TEXT, &msg)?;
 					// Run any on put actions.
 					let actions = self
 						.config
@@ -1002,7 +1002,7 @@ impl Server {
 						"{}:{}: [{:?}] {}",
 						path,
 						p.range.start.line + 1,
-						p.severity.unwrap_or(lsp_types::DiagnosticSeverity::Error),
+						p.severity.unwrap_or(lsp_types::DiagnosticSeverity::ERROR),
 						msg,
 					));
 				}
@@ -1069,7 +1069,7 @@ impl Server {
 							.collect();
 						self.apply_text_edits(
 							&edit.text_document.uri,
-							InsertTextFormat::PlainText,
+							InsertTextFormat::PLAIN_TEXT,
 							&text_edits,
 						)?;
 					}
@@ -1079,7 +1079,7 @@ impl Server {
 		}
 		if let Some(ref changes) = edit.changes {
 			for (url, edits) in changes {
-				self.apply_text_edits(&url, InsertTextFormat::PlainText, &edits)?;
+				self.apply_text_edits(&url, InsertTextFormat::PLAIN_TEXT, &edits)?;
 			}
 		}
 		Ok(())
@@ -1139,7 +1139,7 @@ impl Server {
 			let addr = format!("#{},#{}", soff, eoff);
 			sw.w.addr(&addr)?;
 			match format {
-				InsertTextFormat::Snippet => {
+				InsertTextFormat::SNIPPET => {
 					lazy_static! {
 						static ref SNIPPET: Regex =
 							Regex::new(r"(\$\{\d+:[[:alpha:]]+\})|(\$0)").unwrap();
@@ -1148,10 +1148,11 @@ impl Server {
 					sw.w.write(File::Data, text)?;
 					text.len()
 				}
-				InsertTextFormat::PlainText => {
+				InsertTextFormat::PLAIN_TEXT => {
 					sw.w.write(File::Data, &edit.new_text)?;
 					edit.new_text.len()
 				}
+				_ => panic!("unexpected {:?}", format),
 			};
 		}
 		Ok(())
@@ -1235,7 +1236,7 @@ impl Server {
 				work_done_progress_params,
 				partial_result_params,
 				context: Some(CompletionContext {
-					trigger_kind: CompletionTriggerKind::Invoked,
+					trigger_kind: CompletionTriggerKind::INVOKED,
 					trigger_character: None,
 				}),
 			},
@@ -1399,7 +1400,7 @@ impl Server {
 			Action::Completion(item) => {
 				let format = item
 					.insert_text_format
-					.unwrap_or(InsertTextFormat::PlainText);
+					.unwrap_or(InsertTextFormat::PLAIN_TEXT);
 				if let Some(edit) = item.text_edit.clone() {
 					match edit {
 						CompletionTextEdit::Edit(edit) => {
