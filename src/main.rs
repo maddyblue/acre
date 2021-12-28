@@ -836,17 +836,15 @@ impl Server {
 						Some(i) => i,
 						None => 0,
 					};
-					let sig = msg
-						.signatures
-						.get(sig as usize)
-						.ok_or(anyhow::anyhow!("expected signature"))?;
 					self.set_hover(&url, |hover| {
-						let mut s: String = sig.label.clone();
-						if let Some(doc) = &sig.documentation {
-							s.push_str("\n");
-							s.push_str(extract_doc(doc));
-						}
-						hover.signature = Some(s);
+						hover.signature = msg.signatures.get(sig as usize).map(|sig| {
+							let mut s: String = sig.label.clone();
+							if let Some(doc) = &sig.documentation {
+								s.push_str("\n");
+								s.push_str(extract_doc(doc));
+							}
+							s
+						});
 					});
 				}
 			}
