@@ -1637,16 +1637,16 @@ impl Drop for Server {
 }
 
 fn goto_definition(goto: &GotoDefinitionResponse) -> Result<()> {
-	match goto {
+	let loc: &Location = match goto {
 		GotoDefinitionResponse::Array(locs) => match locs.len() {
-			0 => {}
-			_ => {
-				let plumb = location_to_plumb(&locs[0]);
-				plumb_location(plumb)?;
-			}
+			0 => return Ok(()),
+			_ => &locs[0],
 		},
+		GotoDefinitionResponse::Scalar(loc) => &loc,
 		_ => panic!("unknown definition response: {:?}", goto),
 	};
+	let plumb = location_to_plumb(loc);
+	plumb_location(plumb)?;
 	Ok(())
 }
 
