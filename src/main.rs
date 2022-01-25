@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::fmt::Write;
-use std::fs::metadata;
+use std::fs::{metadata, read_to_string};
 use std::io::Read;
 use std::thread;
 
@@ -49,7 +50,7 @@ fn main() -> Result<()> {
 			std::process::exit(1);
 		}
 	};
-	let config = std::fs::read_to_string(config)?;
+	let config = read_to_string(config)?;
 	let config: TomlConfig = toml::from_str(&config)?;
 	if config.servers.is_empty() {
 		eprintln!("empty servers in configuration file");
@@ -753,7 +754,21 @@ impl Server {
 				let msg = serde_json::from_str::<Option<Vec<Location>>>(result.get())?;
 				if let Some(mut msg) = msg {
 					msg.sort_by(cmp_location);
-					let o: Vec<String> = msg.into_iter().map(|x| location_to_plumb(&x)).collect();
+					let mut o = Vec::new();
+					let mut files: HashMap<Url, String> = HashMap::new();
+					for x in msg {
+						o.push(location_to_plumb(&x));
+						let text = files.entry(x.uri.clone()).or_insert_with(|| {
+							match self.get_sw_by_url(&x.uri) {
+								Some((_, win)) => win.text().unwrap_or((0, "".into())).1,
+								None => read_to_string(x.uri.path()).unwrap_or("".into()),
+							}
+						});
+						if let Some(line) = text.lines().nth(x.range.start.line.try_into().unwrap())
+						{
+							o.push(format!("\t{}", line.trim()));
+						}
+					}
 					if o.len() > 0 {
 						self.output = o.join("\n");
 					}
