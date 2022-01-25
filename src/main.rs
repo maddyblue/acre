@@ -1652,7 +1652,9 @@ fn goto_definition(goto: &GotoDefinitionResponse) -> Result<()> {
 }
 
 fn location_to_plumb(l: &Location) -> String {
-	format!("{}:{}", l.uri.path(), l.range.start.line + 1,)
+	// Including the character here apparently isn't useful because the right click
+	// event from acme doesn't include it, only the line. Why is this?
+	format!("{}:{}", l.uri.path(), l.range.start.line + 1)
 }
 
 fn plumb_location(loc: String) -> Result<()> {
