@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::Write;
 use std::fs::{metadata, read_to_string};
@@ -138,7 +138,7 @@ struct Server {
 	focus: String,
 	progress: HashMap<String, WDProgress>,
 	/// file name -> list of diagnostics
-	diags: HashMap<String, Vec<String>>,
+	diags: BTreeMap<String, Vec<String>>,
 	/// request (client_name, id) -> (method, file Url)
 	requests: HashMap<ClientId, (String, Url)>,
 
@@ -308,7 +308,7 @@ impl Server {
 			focus: "".to_string(),
 			progress: HashMap::new(),
 			requests,
-			diags: HashMap::new(),
+			diags: BTreeMap::new(),
 			current_hover: None,
 			log_r,
 			ev_r,
@@ -497,14 +497,6 @@ impl Server {
 		if let Some(hover) = &self.current_hover {
 			write!(&mut body, "{}----\n", hover.body)?;
 		}
-		for (_, ds) in &self.diags {
-			for d in ds {
-				write!(&mut body, "{}\n", d)?;
-			}
-			if ds.len() > 0 {
-				body.push('\n');
-			}
-		}
 		self.addr.clear();
 		// Loop through by sorted file name.
 		for file_name in &self.names {
@@ -567,6 +559,14 @@ impl Server {
 				url.path(),
 				method
 			)?;
+		}
+		if !self.diags.is_empty() {
+			write!(&mut body, "-----\n")?;
+			for (_, ds) in self.diags.iter().take(5) {
+				for d in ds.iter().take(3) {
+					write!(&mut body, "{}\n", d)?;
+				}
+			}
 		}
 		if self.body != body {
 			self.body = body.clone();
