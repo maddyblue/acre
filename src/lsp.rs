@@ -70,7 +70,11 @@ impl Client {
 					"Content-Length" => {
 						content_len = sp[1].parse().unwrap();
 					}
-					"Content-Type" => (),
+					"Content-Type" => {
+						if sp[1].contains("application/json") {
+							panic!("content-type header set but doesn't contain application/json, {}", sp[1]);
+						}
+					},
 					_ => {
 						panic!("unrecognized header: {}", sp[0]);
 					}
