@@ -70,6 +70,7 @@ impl Client {
 					"Content-Length" => {
 						content_len = sp[1].parse().unwrap();
 					}
+					"Content-Type" => (),
 					_ => {
 						panic!("unrecognized header: {}", sp[0]);
 					}
