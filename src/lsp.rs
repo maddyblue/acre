@@ -74,7 +74,7 @@ impl Client {
 						if sp[1] != "application/vscode-jsonrpc; charset=utf-8" {
 							panic!("unexpected content-type: {}", sp[1]);
 						}
-					},
+					}
 					_ => {
 						panic!("unrecognized header: {}", sp[0]);
 					}
