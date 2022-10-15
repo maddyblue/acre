@@ -71,8 +71,8 @@ impl Client {
 						content_len = sp[1].parse().unwrap();
 					}
 					"Content-Type" => {
-						if sp[1].contains("application/json") {
-							panic!("content-type header set but doesn't contain application/json, {}", sp[1]);
+						if sp[1] != "application/vscode-jsonrpc; charset=utf-8" {
+							panic!("unexpected content-type: {}", sp[1]);
 						}
 					},
 					_ => {
